@@ -1,19 +1,12 @@
 // Module-scope state in a .svelte.ts file (runes enabled), mirroring theme.svelte.ts.
-// Exposed via a getter because the module reassigns it. Applied to :root pre-hydration,
-// so there's no flash. Reads localStorage directly: the page is ssr=false.
+// Exposed via a getter because the module reassigns it. The on-disk config is the
+// source of truth: +page.ts applies the stored accent before first render, and
+// callers persist changes with PUT /api/config.
 export function getAccent(): string {
 	return current;
 }
 
-let current = $state(initial());
-
-function initial(): string {
-	try {
-		return localStorage.getItem('accent') ?? '';
-	} catch {
-		return '';
-	}
-}
+let current = $state('');
 
 // WCAG relative luminance → readable text color for the accent bubble.
 function contrastFor(hex: string): string {
@@ -28,12 +21,6 @@ function contrastFor(hex: string): string {
 
 export function setAccent(hex: string) {
 	current = hex;
-	try {
-		if (hex) localStorage.setItem('accent', hex);
-		else localStorage.removeItem('accent');
-	} catch {
-		/* storage blocked */
-	}
 	const root = document.documentElement;
 	if (hex) {
 		root.style.setProperty('--accent', hex);

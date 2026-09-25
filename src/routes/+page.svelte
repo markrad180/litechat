@@ -4,17 +4,20 @@
 	import Message from './components/Message.svelte';
 	import Composer from './components/Composer.svelte';
 	import Settings from './components/Settings.svelte';
+	import About from './components/About.svelte';
 	import Onboarding from './components/Onboarding.svelte';
 	import ModelPicker from './components/ModelPicker.svelte';
 	import ReasoningPicker from './components/ReasoningPicker.svelte';
+	import { page } from '$app/state';
 	import { api } from '$lib/api.js';
 	import { getTheme, setTheme } from '$lib/theme.svelte.js';
-	import { setAccent } from '$lib/accent.svelte.js';
 	import { workingContext } from '$lib/models.js';
 	import type {
+		AttachmentMeta,
 		Conversation,
 		ConversationMeta,
 		EndpointConfig,
+		PendingAttachment,
 		ReasoningLevel,
 		Message as ChatMessage
 	} from '$lib/types.js';
@@ -26,8 +29,12 @@
 		summary?: string;
 	}
 
-	let config = $state<EndpointConfig | null>(null);
-	const onboard = $derived(!config || !config.baseUrl);
+	// load() (+page.ts) fetched the config and applied theme/accent pre-render.
+	let config = $state<EndpointConfig | null>(page.data.config ?? null);
+	// A valid config needs an endpoint AND a model — anything less re-enters
+	// onboarding (with the endpoint pre-filled), so the main window is only
+	// ever reached with a usable setup.
+	const onboard = $derived(!config || !config.baseUrl || !config.defaultModel);
 
 	let model = $state('');
 	let conversations = $state<ConversationMeta[]>([]);
@@ -40,20 +47,69 @@
 	let liveTools = $state<LiveTool[]>([]);
 	let error = $state('');
 	let showSettings = $state(false);
+	let aboutOpen = $state(false);
+	let dragDepth = $state(0); // dragenter/leave pairs; >0 = a file drag is over the app
+	const dragging = $derived(dragDepth > 0);
 	let pendingDelete = $state<string | null>(null);
 	let pendingShutdown = $state(false);
-	let shuttingDown = $state(false);
 	let chatEl: HTMLDivElement | null = $state(null);
-	let sidebarW = $state(260); // divider drag resizes this; 260 is the CSS default
+	const savedSidebarW = page.data.config?.sidebarWidth;
+	let sidebarW = $state(typeof savedSidebarW === 'number' && savedSidebarW >= 180 && savedSidebarW <= 480 ? savedSidebarW : 260);
+	function persistSidebarW() {
+		void api('/api/config', { method: 'PUT', body: JSON.stringify({ sidebarWidth: sidebarW }) });
+	}
+
+	// File drag over the app: counter balances enter/leave pairs across children,
+	// so the overlay shows without flicker; only real file drags trigger it.
+	function dragEnter(e: DragEvent) {
+		if (e.dataTransfer?.types.includes('Files')) dragDepth++;
+	}
+
+	function dragLeave() {
+		dragDepth = Math.max(0, dragDepth - 1);
+	}
+
+	function dragOver(e: DragEvent) {
+		if (dragging) e.preventDefault(); // allow drop
+	}
+
+	function fileDrop(e: DragEvent) {
+		e.preventDefault();
+		dragDepth = 0;
+		if (e.dataTransfer?.files.length) void attachFiles([...e.dataTransfer.files]);
+	}
+
+	// Long-press the logo for the About dialog.
+	let logoTimer: ReturnType<typeof setTimeout> | null = null;
+	function logoDown() {
+		logoTimer = setTimeout(() => {
+			logoTimer = null;
+			aboutOpen = true;
+		}, 600);
+	}
+	function logoCancel() {
+		if (logoTimer) clearTimeout(logoTimer);
+		logoTimer = null;
+	}
 
 	// Drag the divider: pointer capture keeps tracking even if the cursor leaves the 6px strip.
 	function startResize(e: PointerEvent) {
 		e.preventDefault();
 		const el = e.currentTarget as HTMLElement;
 		el.setPointerCapture(e.pointerId);
-		const onMove = (ev: PointerEvent) => (sidebarW = Math.max(180, Math.min(480, ev.clientX)));
+		const onMove = (ev: PointerEvent) => {
+			sidebarW = Math.max(180, Math.min(480, ev.clientX));
+		};
+		// Commit once per drag session — the config round-trips to disk now.
 		el.addEventListener('pointermove', onMove);
-		el.addEventListener('pointerup', () => el.removeEventListener('pointermove', onMove), { once: true });
+		el.addEventListener(
+			'pointerup',
+			() => {
+				el.removeEventListener('pointermove', onMove);
+				persistSidebarW();
+			},
+			{ once: true }
+		);
 	}
 
 	// Page-level (like model), so the dock works before a conversation exists;
@@ -62,6 +118,80 @@
 	// refreshes and only defaults to medium for a conversation created fresh.
 	let webOn = $state(true);
 	let reasoningLevel = $state<ReasoningLevel>('medium');
+	let pending = $state<PendingAttachment[]>([]); // composer attachment chips
+
+	// Attach files to the active conversation (creates one if needed, like send()).
+	// Sequential per-file uploads: each chip fails independently with the server's
+	// verbatim reason — a batch is never all-or-nothing.
+	async function attachFiles(files: File[]) {
+		if (!files.length) return;
+		if (!active) {
+			await createConversation();
+			if (!active) return;
+		}
+		const convId = active.id;
+		for (const file of files) {
+			const key = crypto.randomUUID();
+			pending = [...pending, { key, name: file.name, size: file.size, status: 'uploading', isImage: true }];
+			try {
+				const form = new FormData();
+				form.append('file', file);
+				const res = await fetch(`/api/conversations/${convId}/attachments`, { method: 'POST', body: form });
+				const data = (await res.json().catch(() => null)) as { attachment?: AttachmentMeta; error?: string } | null;
+				if (res.ok && data?.attachment) {
+					const meta = data.attachment;
+					if (meta.state === 'ready') {
+						pending = pending.map((p) => (p.key === key ? { ...p, status: 'ready', isImage: meta.isImage, meta } : p));
+						active = { ...active, attachments: [...(active.attachments ?? []), meta] };
+					} else {
+						// 201 with a per-file failure (unsupported/parse/empty) — the chip
+						// carries the reason; meta is kept so remove() can DELETE the bytes.
+						pending = pending.map((p) => (p.key === key ? { ...p, status: 'error', isImage: false, error: meta.error, meta } : p));
+					}
+				} else {
+					// 400s are per-file (size/type/parse) — the chip carries the reason;
+					// anything else (404/500) also raises the banner.
+					const msg = data?.error ?? `Upload failed — ${res.status}`;
+					pending = pending.map((p) => (p.key === key ? { ...p, status: 'error', error: msg } : p));
+					if (res.status !== 400) error = msg;
+				}
+			} catch (e) {
+				const msg = `Upload failed — ${e instanceof Error ? e.message : String(e)}`;
+				pending = pending.map((p) => (p.key === key ? { ...p, status: 'error', error: msg } : p));
+				error = msg;
+			}
+		}
+	}
+
+	function removePending(key: string) {
+		const p = pending.find((x) => x.key === key);
+		if (!p) return;
+		pending = pending.filter((x) => x.key !== key);
+		if (p.meta && active) {
+			const convId = active.id;
+			void fetch(`/api/conversations/${convId}/attachments/${p.meta.id}`, { method: 'DELETE' })
+				.then((res) => {
+					if (!res.ok) {
+						// server kept the file — restore the chip, it would otherwise
+						// vanish from the UI while still being stuffed into context
+						pending = [...pending, p];
+						if (active) active = { ...active, attachments: [...(active.attachments ?? []), p.meta!] };
+						return;
+					}
+					if (!active) return;
+					active = { ...active, attachments: (active.attachments ?? []).filter((a) => a.id !== p.meta!.id) };
+				})
+				.catch(() => (error = 'Couldn’t remove the attachment'));
+		}
+	}
+
+	// Persisted attachments for a message: its stamped ids intersected with what the
+	// conversation still has — deleted attachments render nothing, never crash.
+	function attachmentsFor(msg: ChatMessage): (AttachmentMeta & { url: string })[] {
+		if (!active?.attachments || !msg.attachmentIds?.length) return [];
+		const convId = active.id;
+		return active.attachments.filter((a) => msg.attachmentIds!.includes(a.id)).map((a) => ({ ...a, url: `/api/conversations/${convId}/attachments/${a.id}` }));
+	}
 
 	async function refreshList() {
 		conversations = await api<ConversationMeta[]>('/api/conversations');
@@ -75,13 +205,26 @@
 		reasoningLevel = active.reasoning ?? 'medium';
 	}
 
-	async function newConversation() {
-		if (streaming) return;
+	// Materialize the record — the first message (or attachment) creates the
+	// conversation; the sidebar never lists chats with zero messages.
+	async function createConversation() {
 		active = await api<Conversation>('/api/conversations', {
 			method: 'POST',
 			body: JSON.stringify({ model: model || undefined, webTools: webOn, reasoning: reasoningLevel })
 		});
 		await refreshList();
+	}
+
+	// "New chat" = a blank slate, not a record: no POST, no sidebar row.
+	async function newConversation() {
+		if (streaming) return;
+		// Staged chips point at bytes in the current conversation — delete them
+		// so they don't linger (attachmentsFor() would silently drop them anyway).
+		for (const p of pending) {
+			if (p.meta && active) void fetch(`/api/conversations/${active.id}/attachments/${p.meta.id}`, { method: 'DELETE' });
+		}
+		pending = [];
+		active = null;
 	}
 
 	function deleteConversation(id: string) {
@@ -100,7 +243,7 @@
 	$effect(() => {
 		if (!pendingDelete && !pendingShutdown) return;
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === 'Escape' && !shuttingDown) {
+			if (e.key === 'Escape') {
 				pendingDelete = null;
 				pendingShutdown = false;
 			}
@@ -109,11 +252,11 @@
 		return () => document.removeEventListener('keydown', onKey);
 	});
 
-	async function confirmShutdown() {
-		shuttingDown = true;
-		// The server exits ~50ms after this resolves; the tab's connection
-		// drops, so swallow the error and leave the "Stopping…" note up.
-		await api('/api/shutdown', { method: 'POST' }).catch(() => {});
+	function confirmShutdown() {
+		// sendBeacon is guaranteed to deliver on page unload, unlike a fetch
+		// that window.close() can abort; fall back if it can't queue.
+		if (!navigator.sendBeacon('/api/shutdown')) void fetch('/api/shutdown', { method: 'POST' }).catch(() => {});
+		window.close();
 	}
 
 	async function updateConversation(patch: Record<string, unknown>) {
@@ -131,7 +274,7 @@
 
 	async function send(text: string) {
 		if (streaming) return;
-		if (!active) await newConversation();
+		if (!active) await createConversation();
 		if (!active) return;
 		error = '';
 		trimmedNote = '';
@@ -176,14 +319,20 @@
 						liveTools = liveTools.map((t) =>
 							t.id === payload.id ? { ...t, summary: payload.summary } : t
 						);
-					else if (event === 'context')
-						trimmedNote = `Trimmed ${payload.trimmed} older message${payload.trimmed === 1 ? '' : 's'} to fit the context window`;
+					else if (event === 'context') {
+						const notes: string[] = [];
+						if (payload.trimmed)
+							notes.push(`Trimmed ${payload.trimmed} older message${payload.trimmed === 1 ? '' : 's'} to fit the context window`);
+						if (payload.docsTruncated) notes.push('Attached documents were truncated to fit the context window');
+						trimmedNote = notes.join(' · ');
+					}
 					else if (event === 'error') error = payload.message;
 				}
 			}
 			// Re-read the persisted conversation so tool rows match what's on disk.
 			const fresh = await api<Conversation>(`/api/conversations/${active.id}`);
 			active = fresh;
+			pending = []; // the chips are now part of the persisted user message
 			const convId = fresh.id;
 			// Background: ask the same model (non-reasoning) to name the chat;
 			// the 48-char truncation stays as the offline/failed fallback.
@@ -213,7 +362,7 @@
 		if (!active) return {};
 		const out: Record<string, string> = {};
 		for (const m of active.messages) {
-			if (m.role === 'tool' && m.tool_call_id) out[m.tool_call_id] = m.content;
+			if (m.role === 'tool' && m.tool_call_id && typeof m.content === 'string') out[m.tool_call_id] = m.content;
 		}
 		return out;
 	}
@@ -256,7 +405,6 @@
 		const cfg = await api<EndpointConfig>('/api/config');
 		config = cfg;
 		model = cfg.defaultModel ?? '';
-		if (cfg.accent) setAccent(cfg.accent); // server is the source of truth; re-warms localStorage
 		void enterApp();
 	}
 
@@ -282,24 +430,27 @@
 	const lastPrompt = $derived(
 		[...((active?.messages ?? []).filter((m) => m.stats))].at(-1)?.stats?.prompt ?? 0
 	);
-	const contextPct = $derived(config && lastPrompt ? lastPrompt / workingContext(config, model) : 0);
+	// Unknown ceiling (server reports no context size) → no indicator rather than a
+	// percentage of an assumed window.
+	const working = $derived(config ? workingContext(config, model) : null);
+	const contextPct = $derived(config && lastPrompt && working ? lastPrompt / working : 0);
 
-	onMount(async () => {
-		const cfg = await api<EndpointConfig>('/api/config');
-		config = cfg;
-		if (cfg.accent) setAccent(cfg.accent); // server is the source of truth; re-warms localStorage
-		if (cfg.baseUrl) {
-			model = cfg.defaultModel ?? '';
+	onMount(() => {
+		// Config arrived with the page data (load in +page.ts).
+		if (!onboard) {
+			model = config?.defaultModel ?? '';
 			void enterApp();
 		}
 	});
 </script>
 
 {#if onboard}
-	<Onboarding ondone={onOnboardDone} />
+	<Onboarding ondone={onOnboardDone} initBaseUrl={config?.baseUrl ?? ''} />
 {:else}
-	<div class="shell">
-		<div class="logo-bar">litechat</div>
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="shell" ondragenter={dragEnter} ondragleave={dragLeave} ondragover={dragOver} ondrop={fileDrop}>
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="logo-bar" onpointerdown={logoDown} onpointerup={logoCancel} onpointerleave={logoCancel} onpointercancel={logoCancel}>LiteChat</div>
 		<div class="app" style:grid-template-columns="{sidebarW}px 6px 1fr">
 		<aside class="sidebar">
 			<ConversationList
@@ -312,8 +463,8 @@
 			<div class="sidebar-footer">
 				<button
 					class="icon-btn"
-					aria-label="Stop server"
-					title="Stop server"
+					aria-label="Stop app"
+					title="Stop app"
 					onclick={() => (pendingShutdown = true)}
 				>
 					<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0" /><line x1="12" y1="2" x2="12" y2="12" /></svg>
@@ -330,7 +481,11 @@
 					class="icon-btn"
 					aria-label="Toggle theme"
 					title="Toggle theme"
-					onclick={() => setTheme(getTheme() === 'light' ? 'dark' : 'light')}
+					onclick={() => {
+						const t = getTheme() === 'light' ? 'dark' : 'light';
+						setTheme(t);
+						void api('/api/config', { method: 'PUT', body: JSON.stringify({ theme: t }) });
+					}}
 				>
 					{#if getTheme() === 'light'}
 						<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>
@@ -368,7 +523,7 @@
 						</div>
 					{:else}
 						{#each renderItems as item (item.key)}
-							<Message message={item.msg} results={toolResultsFor(item.msg)} />
+							<Message message={item.msg} results={toolResultsFor(item.msg)} attachments={attachmentsFor(item.msg)} />
 						{/each}
 						{#if sentText}
 							<Message message={{ role: 'user', content: sentText }} />
@@ -417,13 +572,32 @@
 							}}
 						/>
 					</div>
-					<Composer onsubmit={send} disabled={streaming} placeholder="Message — Enter to send, Shift+Enter for a new line" />
+					<Composer
+						onsubmit={send}
+						disabled={streaming}
+						placeholder="Message · Enter to send · Shift+Enter for a new line"
+						attachments={pending}
+						onattach={attachFiles}
+						onremove={removePending}
+						initialHeight={config?.composerHeight && config.composerHeight > 0 ? config.composerHeight : null}
+						oncommit={(h) => void api('/api/config', { method: 'PUT', body: JSON.stringify({ composerHeight: h ?? 0 }) })}
+					/>
 				</div>
 			</div>
 		</main>
 	</div>
+	{#if dragging}
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="drop-overlay" role="presentation">
+			<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" /></svg>
+			<p>Drop files to attach</p>
+		</div>
+	{/if}
 	{#if showSettings && config}
 		<Settings config={config} onsaved={onConfigSaved} onclose={() => (showSettings = false)} />
+	{/if}
+	{#if aboutOpen}
+		<About onclose={() => (aboutOpen = false)} />
 	{/if}
 {#if pendingDelete}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -443,21 +617,16 @@
 {#if pendingShutdown}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<div class="modal-overlay" onclick={() => !shuttingDown && (pendingShutdown = false)}>
+	<div class="modal-overlay" onclick={() => (pendingShutdown = false)}>
 		<!-- svelte-ignore a11y_interactive_supports_focus -->
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
-		<div class="confirm-modal" role="dialog" aria-label="Stop Litechat" onclick={(e) => e.stopPropagation()}>
-			{#if shuttingDown}
-				<h2>Stopping…</h2>
-				<p>You can close this tab when it's done.</p>
-			{:else}
-				<h2>Stop Litechat?</h2>
-				<p>The app will stop. Your chats stay saved.</p>
-				<div class="confirm-actions">
-					<button class="btn-ghost" onclick={() => (pendingShutdown = false)}>Cancel</button>
-					<button class="btn-danger" onclick={() => void confirmShutdown()}>Stop server</button>
-				</div>
-			{/if}
+		<div class="confirm-modal" role="dialog" aria-label="Stop LiteChat" onclick={(e) => e.stopPropagation()}>
+			<h2>Stop LiteChat?</h2>
+			<p>The app will stop. Your chats stay saved.</p>
+			<div class="confirm-actions">
+				<button class="btn-ghost" onclick={() => (pendingShutdown = false)}>Cancel</button>
+				<button class="btn-danger" onclick={() => confirmShutdown()}>Stop app</button>
+			</div>
 		</div>
 	</div>
 {/if}

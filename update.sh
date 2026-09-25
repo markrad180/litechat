@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Update Litechat: stops the running server, pulls the latest code,
+# Update LiteChat: stops the running server, pulls the latest code,
 # reinstalls dependencies, and starts the server again.
 set -u
 cd "$(dirname "$0")" || exit 1
@@ -7,7 +7,7 @@ cd "$(dirname "$0")" || exit 1
 # --- Stop the running server ---
 if [ -f server.pid ] && kill -0 "$(cat server.pid)" 2>/dev/null; then
 	PID="$(cat server.pid)"
-	echo "Stopping the running Litechat server (pid $PID)..."
+	echo "Stopping the running LiteChat server (pid $PID)..."
 	kill "$PID" 2>/dev/null
 	for _ in $(seq 1 10); do
 		kill -0 "$PID" 2>/dev/null || break
@@ -16,7 +16,7 @@ if [ -f server.pid ] && kill -0 "$(cat server.pid)" 2>/dev/null; then
 	kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null
 else
 	[ -f server.pid ] && rm -f server.pid
-	echo "Note: no running Litechat server found. If one is running,"
+	echo "Note: no running LiteChat server found. If one is running,"
 	echo "close its terminal window first."
 fi
 

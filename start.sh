@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start Litechat: installs dependencies, launches the dev server, opens the browser.
+# Start LiteChat: installs dependencies, launches the dev server, opens the browser.
 set -u
 cd "$(dirname "$0")" || exit 1
 URL="http://localhost:5173"
@@ -23,7 +23,7 @@ fi
 
 # --- Already running? ---
 if [ -f server.pid ] && kill -0 "$(cat server.pid)" 2>/dev/null; then
-	echo "Litechat is already running at $URL (pid $(cat server.pid))."
+	echo "LiteChat is already running at $URL (pid $(cat server.pid))."
 	echo "Close its terminal window to stop it."
 	read -r -p "Press Enter to close this window..." _
 	exit 0
@@ -37,7 +37,7 @@ echo "$$" > server.pid
 DEV_PID=""
 trap 'rm -f server.pid; [ -n "$DEV_PID" ] && kill "$DEV_PID" 2>/dev/null' EXIT
 
-echo "Starting Litechat..."
+echo "Starting LiteChat..."
 npm run dev & DEV_PID=$!
 
 ready=0
@@ -48,7 +48,7 @@ done
 
 if [ "$ready" = 1 ]; then
 	echo ""
-	echo "Litechat is running at $URL — opening your browser..."
+	echo "LiteChat is running at $URL — opening your browser..."
 	case "$(uname)" in
 	Darwin) open "$URL" ;;
 	*) command -v xdg-open >/dev/null 2>&1 && xdg-open "$URL" ;;

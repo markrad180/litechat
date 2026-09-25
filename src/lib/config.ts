@@ -14,7 +14,8 @@ export const defaultConfig: EndpointConfig = {
 	models: [],
 	defaultModel: '',
 	accent: '',
-	contextReserve: 0.11
+	contextReserve: 0.11,
+	theme: 'light'
 };
 
 interface LegacyEndpoint {

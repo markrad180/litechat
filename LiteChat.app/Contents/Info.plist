@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Litechat</string>
+	<string>LiteChat</string>
 	<key>CFBundleDisplayName</key>
-	<string>Litechat</string>
+	<string>LiteChat</string>
 	<key>CFBundleIdentifier</key>
 	<string>local.litechat.launcher</string>
 	<key>CFBundleVersion</key>
@@ -17,7 +17,7 @@
 	<key>CFBundleExecutable</key>
 	<string>launch</string>
 	<key>CFBundleIconFile</key>
-	<string>Litechat</string>
+	<string>LiteChat</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>10.13</string>
 </dict>

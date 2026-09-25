@@ -3,7 +3,6 @@
 	import { getAccent, setAccent } from '$lib/accent.svelte.js';
 	import { workingContext } from '$lib/models.js';
 	import type { EndpointConfig } from '$lib/types.js';
-	import pkg from '../../../package.json';
 
 	let {
 		config,
@@ -40,7 +39,8 @@
 
 	// Context window: ceiling detected from /models for the selected model, reserve
 	// is user-tunable, working limit derived — same formula the server trims against.
-	const contextCeiling = $derived(modelContext[defaultModel] ?? cfg.contextWindow ?? 160000);
+	// Unknown ceiling → no number shown, no trimming assumed.
+	const contextCeiling = $derived(modelContext[defaultModel] ?? cfg.contextWindow ?? null);
 	const contextWorking = $derived(
 		workingContext({ ...cfg, modelContext, contextReserve: reservePct / 100 }, defaultModel)
 	);
@@ -60,7 +60,8 @@
 	}
 
 	async function save() {
-		if (!baseUrl.trim() || busy) return;
+		// A saved config must be a valid one — the app gate requires both.
+		if (!baseUrl.trim() || !defaultModel.trim() || busy) return;
 		busy = true;
 		try {
 			// PUT strips apiKey from its response; keep the local value for the parent.
@@ -92,11 +93,11 @@
 	];
 	let selected = $state(getAccent());
 
-	function pick(hex: string) {
+	async function pick(hex: string) {
 		setAccent(hex);
 		selected = hex;
-		// persist server-side: survives restarts and new browsers (partial merge keeps the rest)
-		void api('/api/config', { method: 'PUT', body: JSON.stringify({ accent: hex }) });
+		// persist server-side (awaited, so disk can't silently lose the pick); partial merge keeps the rest
+		await api('/api/config', { method: 'PUT', body: JSON.stringify({ accent: hex }) }).catch(() => {});
 	}
 </script>
 
@@ -121,8 +122,8 @@
 					<input bind:value={baseUrl} placeholder="http://localhost:8080/v1" spellcheck="false" />
 				</label>
 				<label class="field">
-					API key <span class="hint">(optional)</span>
-					<input type="password" bind:value={apiKey} placeholder="not required" />
+					API key
+					<input type="password" bind:value={apiKey} placeholder="Optional • unless your provider/server requires one" />
 				</label>
 
 				<div class="models-section">
@@ -148,10 +149,17 @@
 
 				<div class="models-section">
 					<span class="models-head">Context window</span>
-					<p class="sub">
-						Detected {contextCeiling.toLocaleString('en-US')} tokens — working limit
-						{contextWorking.toLocaleString('en-US')}
-					</p>
+					{#if contextCeiling}
+						<p class="sub">
+							{contextCeiling.toLocaleString('en-US')} tokens — working limit
+							{contextWorking?.toLocaleString('en-US') ?? '—'}
+						</p>
+					{:else}
+						<p class="sub">
+							No context size reported — the server limits the window; trimming stays
+							off until it reports one.
+						</p>
+					{/if}
 					<label class="field">
 						Reserve for output <span class="hint">(%, trimmed automatically above this)</span>
 						<input type="number" min="0" max="90" bind:value={reservePct} />
@@ -160,7 +168,7 @@
 
 				<div class="onboard-actions">
 					<button class="btn-ghost" onclick={onclose}>Cancel</button>
-					<button class="btn-primary" disabled={!baseUrl.trim() || busy} onclick={save}>
+					<button class="btn-primary" disabled={!baseUrl.trim() || !defaultModel.trim() || busy} onclick={save}>
 						{saved ? '✓ Saved' : 'Save'}
 					</button>
 				</div>
@@ -182,7 +190,6 @@
 						{/each}
 					</div>
 				</label>
-				<p class="version">Litechat v{pkg.version}</p>
 			</div>
 		{/if}
 	</div>

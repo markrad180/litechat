@@ -2,15 +2,19 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-	<title>Litechat</title>
+	<title>LiteChat</title>
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
 		<script>
-			try {
-				document.documentElement.dataset.theme = localStorage.theme ?? 'light';
-				const accent = localStorage.getItem('accent');
-				if (accent) document.documentElement.style.setProperty('--accent', accent);
-			} catch {}
+			// Apply the stored theme/accent before first paint (the config is
+			// disk-only now); +page.ts re-applies both with full contrast vars.
+			fetch('/api/config')
+				.then((r) => r.json())
+				.then((cfg) => {
+					document.documentElement.dataset.theme = cfg.theme === 'dark' ? 'dark' : 'light';
+					if (cfg.accent) document.documentElement.style.setProperty('--accent', cfg.accent);
+				})
+				.catch(() => {});
 		</script>
 		%sveltekit.head%
 	</head>

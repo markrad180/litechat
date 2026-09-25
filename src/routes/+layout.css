@@ -299,7 +299,6 @@ a:focus-visible {
 }
 
 .msg.user .content {
-	position: relative;
 	background: var(--accent);
 	color: var(--accent-contrast);
 	border-radius: 14px 14px 4px 14px;
@@ -441,18 +440,25 @@ a:focus-visible {
 	position: absolute;
 	top: 6px;
 	right: 6px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	padding: 0;
 	background: var(--panel);
 	color: var(--dim);
 	border: 1px solid var(--border);
 	border-radius: 5px;
-	font-size: 11px;
-	padding: 2px 8px;
 	cursor: pointer;
 	opacity: 0;
 }
 
-.code-block:hover .copy-btn,
-.msg.user .content:hover .copy-btn {
+.copy-btn:hover {
+	color: var(--text);
+}
+
+.code-block:hover .copy-btn {
 	opacity: 1;
 }
 
@@ -475,6 +481,41 @@ a:focus-visible {
 
 .msg-stats svg {
 	flex-shrink: 0;
+}
+
+/* small icon copy button, shared by the stats row and the user-actions row */
+.stat-copy {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	padding: 0;
+	background: none;
+	border: none;
+	border-radius: 4px;
+	color: var(--dim);
+	cursor: pointer;
+}
+
+.stat-copy:hover {
+	color: var(--text);
+	background: var(--hover);
+}
+
+/* hover-revealed action row under a user bubble; fixed in-flow height so the
+   layout never shifts, and the icon never overlaps the bubble */
+.msg-actions {
+	display: flex;
+	justify-content: flex-end;
+	height: 16px;
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+
+.msg.user:hover .msg-actions,
+.msg-actions:focus-within {
+	opacity: 1;
 }
 
 /* ---------- tool activity ---------- */
@@ -854,6 +895,7 @@ a:focus-visible {
 }
 
 .composer-card {
+	position: relative;
 	width: 100%;
 	background: var(--panel);
 	border: 1px solid var(--border);
@@ -861,13 +903,27 @@ a:focus-visible {
 	box-shadow: var(--composer-shadow);
 	padding: 8px 12px;
 	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	transition: border-color 0.15s ease;
+}
+
+.composer-line {
+	display: flex;
 	align-items: flex-end;
 	gap: 10px;
+}
+
+.composer-actions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
 }
 
 .composer-card textarea {
 	flex: 1;
 	resize: none;
+	min-height: 72px;
 	max-height: 160px;
 	background: transparent;
 	color: var(--text);
@@ -875,6 +931,129 @@ a:focus-visible {
 	font: inherit;
 	padding: 8px 4px;
 	outline: none;
+}
+
+.file-input {
+	display: none;
+}
+
+/* pinned to the top-right corner of the card (above the send button);
+   rides the top edge as the box grows */
+.grip-btn {
+	position: absolute;
+	top: 8px;
+	right: 12px;
+	cursor: ns-resize;
+	touch-action: none;
+}
+
+/* no button hover treatment — it's a drag handle, not a button */
+.grip-btn:hover {
+	background: none;
+	color: var(--dim);
+}
+
+/* full-app drop target while a file drag is in progress */
+.drop-overlay {
+	position: fixed;
+	inset: 12px;
+	z-index: 50;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	background: color-mix(in srgb, var(--panel) 88%, transparent);
+	border: 2px dashed var(--accent);
+	border-radius: 16px;
+	color: var(--dim);
+	font-size: 16px;
+}
+
+.drop-overlay svg {
+	color: var(--accent);
+}
+
+.drop-overlay p {
+	margin: 0;
+}
+
+/* ---------- attachment chips ---------- */
+
+.att-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 4px 2px 6px;
+	border-bottom: 1px solid var(--border);
+}
+
+.att-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 320px;
+	padding: 3px 6px 3px 8px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	font-size: 12px;
+	color: var(--text);
+}
+
+.att-chip.ready {
+	color: var(--dim);
+}
+
+.att-chip.error {
+	background: var(--danger-bg);
+	border-color: var(--danger-border);
+	color: var(--danger-fg);
+}
+
+.att-chip .att-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 160px;
+}
+
+.att-chip .att-reason {
+	color: inherit;
+	opacity: 0.85;
+	font-size: 11px;
+}
+
+.att-x {
+	background: none;
+	border: none;
+	padding: 0 1px;
+	font-size: 11px;
+	line-height: 1;
+	color: var(--dim);
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.att-x:hover {
+	color: var(--text);
+}
+
+/* in-message attachments (persisted) */
+.msg-atts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 6px;
+	align-items: center;
+}
+
+.att-thumb {
+	display: block;
+	max-width: 220px;
+	max-height: 160px;
+	border-radius: 10px;
+	border: 1px solid var(--border);
 }
 
 .send-btn {
@@ -919,6 +1098,73 @@ a:focus-visible {
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
+}
+
+/* ---------- about modal ---------- */
+
+.about-card {
+	width: 320px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 16px;
+	box-shadow: var(--composer-shadow);
+	padding: 28px 24px 24px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+	text-align: center;
+}
+
+.about-fox {
+	width: 56px;
+	height: auto;
+	color: var(--accent);
+	display: block;
+	margin-bottom: 10px;
+}
+
+.about-card h1 {
+	margin: 0;
+	font-family: ui-rounded, 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', system-ui, sans-serif;
+	font-weight: 700;
+	font-size: 20px;
+	color: var(--text);
+}
+
+.about-version,
+.about-tag {
+	margin: 0;
+	font-size: 13px;
+	color: var(--dim);
+}
+
+.about-links {
+	display: flex;
+	gap: 14px;
+	margin-top: 14px;
+}
+
+.about-links a {
+	font-size: 13px;
+	color: var(--accent);
+	text-decoration: none;
+}
+
+.about-links a:hover {
+	text-decoration: underline;
+}
+
+.about-built {
+	margin: 18px 0 0;
+	font-size: 13px;
+	color: var(--dim);
+	white-space: nowrap;
+}
+
+.about-built .heart {
+	color: var(--accent);
+	vertical-align: -1px;
 }
 
 .modal-tabs {
@@ -995,13 +1241,6 @@ a:focus-visible {
 	margin: 0;
 	font-size: 13px;
 	color: var(--dim);
-}
-
-.version {
-	margin: 12px 0 0;
-	font-size: 11px;
-	color: var(--dim);
-	opacity: 0.6;
 }
 
 .models-section {

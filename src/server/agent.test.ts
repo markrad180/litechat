@@ -5,15 +5,18 @@ import {
 	extractReasoning,
 	filterTools,
 	runAgent,
+	stuffAttachments,
 	trimHistory,
 	toWire
 } from './agent.js';
 import type { Message, ToolCall } from '$lib/types.js';
 
 vi.mock('$lib/config', () => ({
-	loadConfig: () => ({ baseUrl: 'http://localhost:9999/v1', apiKey: '', models: [] }),
-	workingContext: () => 160000
+	loadConfig: () => ({ baseUrl: 'http://localhost:9999/v1', apiKey: '', models: [] })
 }));
+// agent.ts imports workingContext from $lib/models (this mock previously pointed at
+// $lib/config, so the tests silently ran against the real 160K default)
+vi.mock('$lib/models.js', () => ({ workingContext: () => 142400 }));
 
 // SSE response body for one upstream stream: a tool-call round or a plain answer.
 function sseResponse(sse: string) {
@@ -72,6 +75,115 @@ describe('estimateTokens / trimHistory', () => {
 		const { messages, trimmed } = trimHistory(msgs, 10);
 		expect(trimmed).toBe(0);
 		expect(messages).toEqual(msgs);
+	});
+});
+
+describe('estimateTokens with content blocks', () => {
+	it('sums text blocks and image-URL lengths', () => {
+		const msg: Message = {
+			role: 'user',
+			content: [{ type: 'text', text: 'abcd' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }]
+		};
+		// 4 + 26 = 30 chars ÷ 4 = 7.5 → 8
+		expect(estimateTokens([msg])).toBe(1508);
+	});
+});
+
+describe('stuffAttachments', () => {
+	const docs = [
+		{ name: 'a.md', text: 'A'.repeat(100) },
+		{ name: 'b.md', text: 'B'.repeat(100) }
+	];
+
+	it('stuffs whole docs when they fit', () => {
+		const s = stuffAttachments(docs, 1000);
+		expect(s.truncated).toBe(false);
+		expect(s.text).toBe('=== a.md ===\n' + 'A'.repeat(100) + '\n\n=== b.md ===\n' + 'B'.repeat(100));
+	});
+
+	it('cuts at a doc boundary and marks the omission when they don’t', () => {
+		const s = stuffAttachments(docs, 150); // fits a.md (≈109 chars) + part of the b.md header
+		expect(s.truncated).toBe(true);
+		expect(s.omitted).toBeGreaterThan(0);
+		expect(s.text).toContain('=== a.md ===');
+		expect(s.text).not.toContain('=== b.md ==='); // whole docs stay intact
+		expect(s.text).toMatch(/\[truncated — \d+ characters of attached documents omitted/);
+	});
+});
+
+describe('runAgent attachments', () => {
+	// mocked upstream answers in one round
+	function capture() {
+		const requests: { messages?: unknown[] }[] = [];
+		const events: [string, unknown][] = [];
+		globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+			const body = JSON.parse(init!.body as string);
+			requests.push(body);
+			return sseResponse(ANSWER_SSE);
+		}) as typeof fetch;
+		return {
+			requests,
+			events,
+			emit: (event: string, data: unknown) => events.push([event, data])
+		};
+	}
+
+	it('stuffs a leading wire-only system message and never persists it', async () => {
+		const { requests, emit } = capture();
+		const out = await runAgent({
+			model: 'm',
+			messages: [{ role: 'user', content: 'summarize' }],
+			attachments: [{ name: 'a.md', text: 'alpha content', isImage: false }],
+			emit
+		});
+		const first = requests[0].messages?.[0] as { role: string; content: string };
+		expect(first.role).toBe('system');
+		expect(first.content).toContain('=== a.md ===\nalpha content');
+		expect(out.every((m) => m.role !== 'system')).toBe(true); // appended excludes the stuffing
+	});
+
+	it('truncates oversized docs and reports it via a context event', async () => {
+		const { requests, events, emit } = capture();
+		// working = 160000*0.89 = 142400 → doc budget = 56960 tokens = 227840 chars
+		const huge = 'x'.repeat(300_000);
+		await runAgent({
+			model: 'm',
+			messages: [{ role: 'user', content: 'hi' }],
+			attachments: [{ name: 'big.md', text: huge, isImage: false }],
+			emit
+		});
+		const stuffed = requests[0].messages?.[0] as { content: string };
+		expect(stuffed.content).toMatch(/\[truncated — \d+ characters/);
+		expect(events.some(([e, d]) => e === 'context' && (d as { docsTruncated?: boolean }).docsTruncated)).toBe(true);
+	});
+
+	it('puts images on the sending turn as content blocks', async () => {
+		const { requests, emit } = capture();
+		await runAgent({
+			model: 'm',
+			messages: [{ role: 'user', content: 'what is this?' }],
+			attachments: [{ name: 'a.png', isImage: true, dataUri: 'data:image/png;base64,AAA' }],
+			emit
+		});
+		const last = requests[0].messages?.at(-1) as { content: unknown[] };
+		expect(last.content).toEqual([
+			{ type: 'text', text: 'what is this?' },
+			{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }
+		]);
+	});
+});
+
+describe('trimHistory with a stuffed system message', () => {
+	it('keeps the leading attachment context and trims user turns around it', () => {
+		const stuffed: Message = { role: 'system', content: 'Attached files…' };
+		const turn = (n: number): Message[] => [
+			{ role: 'user', content: 'x'.repeat(n * 4) },
+			{ role: 'assistant', content: 'done' }
+		];
+		const msgs: Message[] = [stuffed, ...turn(1000), ...turn(1000), ...turn(1000)];
+		const { messages } = trimHistory(msgs, 1500 + 1000 + 300); // room for stuffing + one turn
+		expect(messages[0]).toBe(stuffed);
+		expect(messages.filter((m) => m.role === 'user')).toHaveLength(1);
 	});
 });
 

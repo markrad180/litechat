@@ -1,19 +1,10 @@
 // Module-scope state in a .svelte.ts file (runes enabled). Exposed via a getter
 // because the module reassigns it — an exported state binding can't.
-// Reads localStorage directly: safe because the page is ssr=false — don't
-// enable SSR without moving this.
+// The on-disk config is the source of truth: +page.ts applies the stored theme
+// before first render, and callers persist changes with PUT /api/config.
 export type Theme = 'light' | 'dark';
 
-function initial(): Theme {
-	try {
-		const saved = localStorage.getItem('theme');
-		return saved === 'dark' || saved === 'light' ? saved : 'light';
-	} catch {
-		return 'light';
-	}
-}
-
-let current = $state<Theme>(initial());
+let current = $state<Theme>('light');
 
 export function getTheme(): Theme {
 	return current;
@@ -21,10 +12,5 @@ export function getTheme(): Theme {
 
 export function setTheme(t: Theme) {
 	current = t;
-	try {
-		localStorage.setItem('theme', t);
-	} catch {
-		/* storage blocked */
-	}
 	document.documentElement.dataset.theme = t;
 }

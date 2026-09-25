@@ -31,6 +31,7 @@ export async function listConversations(): Promise<ConversationMeta[]> {
 		)
 	).filter((c): c is Conversation => c !== null);
 	return convs
+		.filter((c) => (c.messages?.length ?? 0) > 0) // empty chats (no messages) aren't listed
 		.sort((a, b) => b.updatedAt - a.updatedAt)
 		.map(({ id, title, updatedAt, model }) => ({ id, title, updatedAt, model }));
 }
@@ -39,6 +40,7 @@ export async function listConversations(): Promise<ConversationMeta[]> {
 function withDefaults(c: Conversation): Conversation {
 	c.webTools ??= true;
 	c.reasoning ??= 'medium';
+	c.attachments ??= [];
 	return c;
 }
 
@@ -75,7 +77,9 @@ export async function createConversation(p: {
 
 export async function updateConversation(
 	id: string,
-	patch: Partial<Pick<Conversation, 'title' | 'model' | 'endpointId' | 'messages' | 'webTools' | 'reasoning'>>
+	patch: Partial<
+		Pick<Conversation, 'title' | 'model' | 'endpointId' | 'messages' | 'attachments' | 'webTools' | 'reasoning'>
+	>
 ): Promise<Conversation> {
 	const conv = await getConversation(id);
 	const updated: Conversation = { ...conv, ...patch, id, updatedAt: Date.now() };
@@ -85,4 +89,6 @@ export async function updateConversation(
 
 export async function deleteConversation(id: string): Promise<void> {
 	await fs.unlink(fileFor(id)).catch(() => {});
+	// attachments live in a per-conversation dir; the JSON filter above ignores it
+	await fs.rm(path.join(DATA_DIR, id), { recursive: true, force: true }).catch(() => {});
 }

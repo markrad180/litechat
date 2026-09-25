@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { defaultConfig, loadConfig, saveConfig } from './config.js';
 import { workingContext } from './models.js';
+import type { EndpointConfig } from './types.js';
 
 let dir: string;
 const cfgPath = () => path.join(dir, 'config.json');
@@ -58,13 +59,14 @@ describe('loadConfig', () => {
 	});
 
 	it('round-trips saveConfig', () => {
-		const cfg = {
+		const cfg: EndpointConfig = {
 			name: 'x',
 			baseUrl: 'http://u/v1',
 			apiKey: 'k',
 			models: ['a'],
 			defaultModel: 'a',
 			accent: '',
+			theme: 'light',
 			contextReserve: 0.11
 		};
 		saveConfig(cfg, cfgPath());
@@ -75,9 +77,9 @@ describe('loadConfig', () => {
 		expect(workingContext({ ...loadConfig(cfgPath(), legacyPath()), modelContext: { m: 180224 } }, 'm')).toBe(
 			160399
 		);
-		// no detected ceiling → contextWindow, then the 160K default
+		// no detected ceiling → the configured contextWindow, and null when unknown (no assumed default)
 		expect(workingContext({ ...defaultConfig, contextWindow: 32000 }, 'm')).toBe(28480);
-		expect(workingContext(defaultConfig, 'm')).toBe(142400);
+		expect(workingContext(defaultConfig, 'm')).toBeNull();
 	});
 
 	it('persists accent and defaults it to unset', () => {

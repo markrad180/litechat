@@ -1,4 +1,4 @@
-# Litechat
+# LiteChat
 
 A locally hosted, GPT-like web chat for local LLM inference servers
 ([llama.cpp](https://github.com/ggml-org/llama.cpp), [Ninfer](https://github.com/0xNIN/ninfer), or
@@ -25,7 +25,7 @@ cd litechat
 
 **3. Launch:**
 
-- **macOS:** double-click the fox icon **`Litechat.app`** in the folder.
+- **macOS:** double-click the fox icon **`LiteChat.app`** in the folder.
 - **Linux:** run `./start.sh` in a terminal.
 
 That's it. The script installs dependencies, starts the app, and opens
@@ -42,7 +42,7 @@ models it fetches from the server (or type a name if the server has no `/models`
 
 When a new version is pushed to the repo:
 
-- **macOS:** double-click **`Update Litechat.app`**
+- **macOS:** double-click **`Update LiteChat.app`**
 - **Linux:** `./update.sh`
 
 The script stops the running app, pulls the latest code, reinstalls
@@ -56,6 +56,7 @@ updating (or re-cloning) never touches your chats:
 
 - `data/config.json` — server URL, API key, model list
 - `data/conversations/` — one JSON file per conversation
+- `data/conversations/<id>/attachments/` — attached files (raw bytes + extracted text)
 
 Delete the `data/` folder to start fresh.
 

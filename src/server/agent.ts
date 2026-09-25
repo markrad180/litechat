@@ -1,7 +1,15 @@
 import { loadConfig } from '$lib/config';
 import { workingContext } from '$lib/models.js';
 import { executeTool, toolSchemas } from '$lib/tools';
-import type { EndpointConfig, Message, ReasoningLevel, ToolCall } from '$lib/types';
+import type { ContentBlock, EndpointConfig, Message, ReasoningLevel, ToolCall } from '$lib/types';
+
+// What the chat route hands runAgent for each conversation attachment.
+export interface AttachmentInput {
+	name: string;
+	text?: string; // extracted text (docs)
+	dataUri?: string; // images, data:<mime>;base64,…
+	isImage: boolean;
+}
 
 const MAX_TOOL_ROUNDS = 5;
 
@@ -78,10 +86,30 @@ export function toWire(messages: Message[]): WireMessage[] {
 export function estimateTokens(msgs: Message[]): number {
 	let chars = 0;
 	for (const m of msgs) {
-		chars += m.content.length;
+		// ponytail: data-URI chars÷4 — overcounts real image-token cost, safe direction
+		chars += typeof m.content === 'string' ? m.content.length : m.content.reduce((s, b) => s + (b.type === 'text' ? b.text.length : b.image_url.url.length), 0);
 		for (const tc of m.tool_calls ?? []) chars += tc.name.length + tc.arguments.length;
 	}
 	return Math.ceil(chars / 4) + 1500;
+}
+
+// Join attachment text into one stuffed block; on overflow, cut at the last doc
+// boundary before the cap so whole docs stay intact. Pure, so it's unit-testable.
+export function stuffAttachments(
+	docs: { name: string; text: string }[],
+	budgetChars: number
+): { text: string; truncated: boolean; omitted: number } {
+	const full = docs.map((d) => `=== ${d.name} ===\n${d.text}`).join('\n\n');
+	if (full.length <= budgetChars) return { text: full, truncated: false, omitted: 0 };
+	const out = full.slice(0, budgetChars);
+	const cut = out.lastIndexOf('\n\n=== ');
+	const kept = cut > 0 ? out.slice(0, cut) : out;
+	const omitted = full.length - kept.length;
+	return {
+		text: `${kept}\n[truncated — ${omitted} characters of attached documents omitted to fit the context window]`,
+		truncated: true,
+		omitted
+	};
 }
 
 // Drop the oldest whole turns (a user message plus the assistant/tool messages that
@@ -201,13 +229,41 @@ export async function runAgent(opts: {
 	messages: Message[]; // full history including the new user message
 	tools?: string[]; // tool names to enable; undefined = all
 	reasoning?: ReasoningLevel;
+	attachments?: AttachmentInput[]; // conversation attachments to stuff in
 	emit: Emit;
 }): Promise<Message[]> {
 	const endpoint = loadConfig();
 	if (!endpoint.baseUrl) throw new Error('Model server not configured — set the base URL in Settings');
 	const messages: Message[] = [...opts.messages];
 	const appended: Message[] = [];
-	const working = workingContext(endpoint, opts.model);
+	// No detected/configured ceiling → Infinity: don't trim against an assumed window.
+	const working = workingContext(endpoint, opts.model) ?? Infinity;
+
+	// Context stuffing: docs get 40% of the working window, history keeps ≥60% before
+	// trimming. The stuffed system message is wire-only (like the tool nudge below) —
+	// re-injected every round, never persisted. As a leading system message it survives
+	// trimHistory, which only splices between user turns.
+	if (opts.attachments?.length) {
+		const docs = opts.attachments.filter((a) => !a.isImage && a.text).map((a) => ({ name: a.name, text: a.text! }));
+		if (docs.length) {
+			const stuffed = stuffAttachments(docs, Math.floor(working * 0.4) * 4);
+			messages.unshift({
+				role: 'system',
+				content: `Attached files in this conversation (extracted text):\n\n${stuffed.text}`
+			});
+			if (stuffed.truncated) opts.emit('context', { trimmed: 0, docsTruncated: true, docsOmittedChars: stuffed.omitted });
+		}
+		// Images ride on the sending turn only; older turns were trimmed or already saw them.
+		const images = opts.attachments.filter((a) => a.isImage && a.dataUri);
+		const last = messages[messages.length - 1];
+		if (images.length && last?.role === 'user' && typeof last.content === 'string') {
+			const blocks: ContentBlock[] = [
+				{ type: 'text', text: last.content },
+				...images.map((a): ContentBlock => ({ type: 'image_url', image_url: { url: a.dataUri! } }))
+			];
+			messages[messages.length - 1] = { ...last, content: blocks };
+		}
+	}
 	const t0 = Date.now();
 	let promptTokens = 0;
 	let completionTokens = 0;

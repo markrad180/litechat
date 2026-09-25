@@ -1,27 +1,32 @@
 <script lang="ts">
 	import { renderMarkdown } from '$lib/md.js';
 	import { fmtCount, fmtRate, fmtWall } from '$lib/stats.js';
-	import type { Message as ChatMessage, ReasoningLevel } from '$lib/types.js';
+	import type { AttachmentMeta, Message as ChatMessage, ReasoningLevel } from '$lib/types.js';
 
 	let {
 		message,
 		tools = [],
 		results = {},
-		live = false
+		live = false,
+		attachments = []
 	}: {
 		message: ChatMessage;
 		tools?: { id: string; name: string; args: Record<string, unknown>; summary?: string }[];
 		results?: Record<string, string>;
 		live?: boolean;
+		attachments?: (AttachmentMeta & { url: string })[]; // persisted attachments for display
 	} = $props();
 
-	const html = $derived(message.content ? renderMarkdown(message.content) : '');
+	// Content is a string wherever persisted; ContentBlock[] is wire-only, so the
+	// string-only paths below guard the union type defensively.
+	const contentText = $derived(typeof message.content === 'string' ? message.content : '');
+	const html = $derived(message.role === 'assistant' && contentText ? renderMarkdown(contentText) : '');
 	// User bubbles are plain text, not markdown. Tidy the composer's raw newlines
 	// (trailing spaces, 3+ blank lines) and linkify bare URLs so long ones wrap
 	// cleanly. Copy still copies the original text.
 	const userParts = $derived.by(() => {
-		if (message.role !== 'user' || !message.content) return [];
-		const text = message.content.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+		if (message.role !== 'user' || !contentText) return [];
+		const text = contentText.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 		// ponytail: regex linkify (2nd group catches trailing sentence punctuation, kept as plain text)
 		return text.split(/(https?:\/\/[^\s<>"')\]]+)([.,;:!?]*)/g).map((p) =>
 			/^https?:\/\//.test(p) ? { text: p, href: p } : { text: p }
@@ -48,22 +53,32 @@
 		return l === 'xhigh' ? 'Ultra' : l.charAt(0).toUpperCase() + l.slice(1);
 	}
 
-	// Plain-text copy for user bubbles (code-block copies delegate — see onCopyClick).
+	// Broken thumbs (attachment file deleted on disk) fall back to a named chip.
+	// A Record, not a Set — $state tracks property access/assignment reliably,
+	// while Set .has/.add does not invalidate the dependent {#if} here.
+	let brokenThumbs = $state<Record<string, boolean>>({});
+
+	const COPY_ICON =
+		'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>';
+	const CHECK_ICON =
+		'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>';
+
+	// Icon copy: write the plain text, flash a check for a beat.
 	function copyMessage(btn: HTMLButtonElement, text: string) {
 		void navigator.clipboard.writeText(text);
-		btn.textContent = '✓ copied';
-		setTimeout(() => (btn.textContent = 'copy'), 1200);
+		btn.innerHTML = CHECK_ICON;
+		setTimeout(() => (btn.innerHTML = COPY_ICON), 1200);
 	}
 
-	// Copy buttons live inside the innerHTML, so delegate from the container.
+	// Code-block copy buttons live inside the innerHTML, so delegate from the container.
 	function onCopyClick(e: MouseEvent) {
-		const btn = (e.target as HTMLElement).closest('.copy-btn') as HTMLElement | null;
+		const btn = (e.target as HTMLElement).closest('.copy-btn') as HTMLButtonElement | null;
 		if (!btn) return;
 		const code = btn.parentElement?.querySelector('code');
 		if (!code) return;
 		void navigator.clipboard.writeText(code.textContent ?? '');
-		btn.textContent = '✓ copied';
-		setTimeout(() => (btn.textContent = 'copy'), 1200);
+		btn.innerHTML = CHECK_ICON;
+		setTimeout(() => (btn.innerHTML = COPY_ICON), 1200);
 	}
 </script>
 
@@ -130,6 +145,24 @@
 			</div>
 		{/if}
 		{#if message.role === 'user'}
+			{#if attachments.length}
+				<div class="msg-atts">
+					{#each attachments as a (a.id)}
+						{#if a.isImage}
+							{#if !brokenThumbs[a.id]}
+								<img class="att-thumb" src={a.url} alt={a.name} loading="lazy" onerror={() => (brokenThumbs[a.id] = true)} />
+							{:else}
+								<span class="att-chip error">{a.name} — file unavailable</span>
+							{/if}
+						{:else}
+							<a class="att-chip ready" href={a.url} target="_blank" rel="noopener noreferrer" title="Download {a.name}">
+								<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+								<span class="att-name">{a.name}</span>
+							</a>
+						{/if}
+					{/each}
+				</div>
+			{/if}
 			<div class="content">
 				{#each userParts as p, i (i)}
 					{#if p.href}
@@ -138,14 +171,18 @@
 						{p.text}
 					{/if}
 				{/each}
-				<button
-					class="copy-btn"
-					aria-label="Copy message"
-					onclick={(e) => copyMessage(e.currentTarget, message.content)}
-				>
-					copy
-				</button>
 			</div>
+			{#if contentText}
+				<div class="msg-actions">
+					<button
+						class="stat-copy"
+						aria-label="Copy message"
+						onclick={(e) => copyMessage(e.currentTarget, contentText)}
+					>
+						{@html COPY_ICON}
+					</button>
+				</div>
+			{/if}
 		{:else if html || live}
 			<!-- svelte-ignore a11y_click_events_have_key_events -->
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -154,8 +191,9 @@
 				<span class="caret"></span>
 			{/if}
 		{/if}
-		{#if message.stats}
+		{#if message.role === 'assistant' && (message.stats || contentText)}
 			<div class="msg-stats">
+				{#if message.stats}
 				<span class="stat">
 					<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5" /><path d="M5 12l7-7 7 7" /></svg>
 					{fmtRate(message.stats.prompt, message.stats.wallMs / 1000)}
@@ -172,6 +210,12 @@
 					<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h16" /><path d="M4 15h16" /><path d="M10 3 8 21" /><path d="M16 3l-2 18" /></svg>
 					{fmtCount(message.stats.prompt + message.stats.completion)}
 				</span>
+				{/if}
+				{#if contentText}
+					<button class="stat-copy" aria-label="Copy message" onclick={(e) => copyMessage(e.currentTarget, contentText)}>
+						{@html COPY_ICON}
+					</button>
+				{/if}
 			</div>
 		{/if}
 	</div>
