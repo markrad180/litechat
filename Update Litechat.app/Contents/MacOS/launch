@@ -1,0 +1,6 @@
+#!/bin/bash
+# Double-click launcher: opens a Terminal window running the repo's update script.
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+osascript \
+	-e 'tell application "Terminal" to activate' \
+	-e "tell application \"Terminal\" to do script \"cd '$ROOT' && ./update.sh && exit\""
