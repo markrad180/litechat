@@ -2,6 +2,15 @@
 
 All notable changes to LiteChat are documented here.
 
+## [0.2.1] - 2026-09-25
+
+### Fixed
+
+- "Update LiteChat.app" no longer starts the server. It now only stops a running server, pulls the latest code, and updates dependencies — launch LiteChat.app separately to start the app.
+- The `/favicon.ico` 404 in the browser console: the app now serves a favicon.
+- All npm audit vulnerabilities are resolved: `xlsx` (SheetJS) moved to the patched 0.20.3 release from SheetJS's official CDN (npm's copy was stuck at vulnerable 0.18.5), and the `cookie` dependency via `@sveltejs/kit` is pinned to the patched 0.7.x line.
+- Dependency installation no longer prints audit/funding reports to the terminal.
+
 ## [0.2.0] - 2026-09-25
 
 ### Added

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Update LiteChat: stops the running server, pulls the latest code,
-# reinstalls dependencies, and starts the server again.
+# and reinstalls dependencies. Does not start the server — use LiteChat.app.
 set -u
 cd "$(dirname "$0")" || exit 1
 
@@ -29,5 +29,6 @@ fi
 echo "Pulling the latest version..."
 git pull --ff-only || { echo "git pull failed — see the error above."; exit 1; }
 echo "Updating dependencies..."
-npm ci
-exec ./start.sh
+npm ci --no-audit --no-fund
+echo ""
+echo "LiteChat updated. Launch LiteChat.app to start it."

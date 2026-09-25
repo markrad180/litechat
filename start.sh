@@ -31,7 +31,7 @@ fi
 rm -f server.pid
 
 echo "Installing dependencies (quick if you've done this before)..."
-npm ci || { echo "npm install failed — see the error above."; read -r -p "Press Enter to close this window..." _; exit 1; }
+npm ci --no-audit --no-fund || { echo "npm install failed — see the error above."; read -r -p "Press Enter to close this window..." _; exit 1; }
 
 echo "$$" > server.pid
 DEV_PID=""
