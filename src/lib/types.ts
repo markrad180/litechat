@@ -15,6 +15,8 @@ export interface TurnStats {
 }
 
 // OpenAI wire shape, verbatim — image content rides the model's vision support.
+// Wire-only: persisted content is always a string; image blocks are rebuilt per
+// turn onto the user message that carried the attachment (agent.ts).
 export type ContentBlock =
 	| { type: 'text'; text: string }
 	| { type: 'image_url'; image_url: { url: string } }; // data: URI
@@ -85,6 +87,8 @@ export interface EndpointConfig {
 	contextWindow?: number; // whole-model ceiling (e.g. max_model_len); used when modelContext lacks the active model
 	contextReserve?: number; // fraction reserved for output, 0..1 (default 0.11)
 	modelContext?: Record<string, number>; // per-model ceilings detected from /models
+	vision?: Record<string, boolean>; // per-model vision capability from the tiny-image probe; missing = unprobed
+	reasoning?: Record<string, ReasoningLevel[]>; // per-model accepted efforts from the probe; [] = none; missing = unprobed
 	theme?: 'light' | 'dark'; // missing = light
 	sidebarWidth?: number; // px, 180..480; missing = default 260
 	composerHeight?: number; // px; 0/missing = auto-grow

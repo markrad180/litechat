@@ -86,6 +86,15 @@ describe('extract', () => {
 		expect(res.text).toContain(DOC_TEXT);
 	});
 
+	it('leaves the caller\'s PDF bytes usable after extraction (unpdf detaches its copy)', async () => {
+		const bytes = makePdf(DOC_TEXT);
+		await extract('doc.pdf', bytes);
+		// saveAttachment writes these bytes back to disk right after extract();
+		// a detached buffer has byteLength 0 and throws on new Uint8Array()
+		expect(bytes.byteLength).toBeGreaterThan(0);
+		expect(bytes[0]).toBe(0x25); // '%' of %PDF
+	});
+
 	it('extracts text from a real DOCX', async () => {
 		const res = await extract('doc.docx', makeDocx(DOC_TEXT));
 		expect(res.text).toContain(DOC_TEXT);

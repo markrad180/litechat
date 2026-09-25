@@ -296,6 +296,9 @@ a:focus-visible {
 .msg.user {
 	align-self: flex-end;
 	align-items: flex-end;
+	/* cap against the thread (stable width), not the self-wrapping .msg: a % max-width
+		on .content resolved against its own fit-content and split short words mid-char */
+	max-width: 85%;
 }
 
 .msg.user .content {
@@ -303,7 +306,6 @@ a:focus-visible {
 	color: var(--accent-contrast);
 	border-radius: 14px 14px 4px 14px;
 	padding: 10px 14px;
-	max-width: 85%;
 	white-space: pre-wrap;
 	/* anywhere: long URLs/words break at any character instead of stretching the bubble */
 	overflow-wrap: anywhere;
@@ -721,6 +723,7 @@ a:focus-visible {
 /* All dock chips share one metric set: same height, padding, radius. */
 .model-chip,
 .web-chip,
+.vision-chip,
 .reasoning-chip {
 	display: inline-flex;
 	align-items: center;
@@ -739,9 +742,63 @@ a:focus-visible {
 	border-color: var(--dim);
 }
 
+/* Passive capability indicator — informational, not a control. */
+.vision-chip {
+	cursor: default;
+}
+
 .web-chip.on {
 	color: var(--accent);
 	border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+/* An image is attached and will ride along with the next turn — accent pill
+   with a constellation of diffraction sparks (hot core + four thin spikes)
+   blooming on the outline: each grows and fades in place, at its own size,
+   intensity and pace, extending symmetrically inward and outward. The JS in
+   +page.svelte re-rolls each spark's outline position after every fade. */
+.vision-chip.on {
+	position: relative;
+	color: var(--accent);
+	border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.vision-chip .spark {
+	position: absolute;
+	left: var(--x);
+	top: var(--y);
+	width: calc(14px * var(--s));
+	height: calc(14px * var(--s));
+	pointer-events: none;
+	background:
+		linear-gradient(90deg, transparent, color-mix(in srgb, #fff 55%, var(--accent)) 50%, transparent) 0 50% / 100% 1.5px no-repeat,
+		linear-gradient(0deg, transparent, color-mix(in srgb, #fff 55%, var(--accent)) 50%, transparent) 50% 0 / 1.5px 100% no-repeat,
+		radial-gradient(circle, #fff, transparent 55%) 50% 50% / 60% 60% no-repeat;
+	opacity: 0;
+	transform: translate(-50%, -50%) scale(0);
+	animation: vision-sparkle var(--d) ease-in-out var(--dl) infinite;
+}
+
+@keyframes vision-sparkle {
+	0% {
+		opacity: 0;
+		transform: translate(-50%, -50%) scale(0);
+	}
+	30% {
+		opacity: var(--i, 0.9);
+		transform: translate(-50%, -50%) scale(1);
+	}
+	60%,
+	100% {
+		opacity: 0;
+		transform: translate(-50%, -50%) scale(0.3);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.vision-chip .spark {
+		animation: none;
+	}
 }
 
 .web-chip.off {
@@ -877,6 +934,15 @@ a:focus-visible {
 	font-weight: 600;
 }
 
+.model-row:disabled {
+	color: var(--dim);
+	cursor: default;
+}
+
+.model-row:disabled:hover {
+	background: none;
+}
+
 .model-sep {
 	height: 1px;
 	background: var(--border);
@@ -908,10 +974,12 @@ a:focus-visible {
 	transition: border-color 0.15s ease;
 }
 
+/* Own row under the textarea: attach left, send/stop right. The textarea above
+   stretches full card width, so no text line ever terminates at the icons. */
 .composer-line {
 	display: flex;
-	align-items: flex-end;
-	gap: 10px;
+	align-items: center;
+	justify-content: space-between;
 }
 
 .composer-actions {
@@ -921,7 +989,7 @@ a:focus-visible {
 }
 
 .composer-card textarea {
-	flex: 1;
+	width: 100%;
 	resize: none;
 	min-height: 72px;
 	max-height: 160px;
@@ -931,6 +999,7 @@ a:focus-visible {
 	font: inherit;
 	padding: 8px 4px;
 	outline: none;
+	box-sizing: border-box;
 }
 
 .file-input {
@@ -1054,6 +1123,7 @@ a:focus-visible {
 	max-height: 160px;
 	border-radius: 10px;
 	border: 1px solid var(--border);
+	cursor: zoom-in;
 }
 
 .send-btn {
@@ -1086,6 +1156,26 @@ a:focus-visible {
 	justify-content: center;
 	z-index: 50;
 	padding: 24px;
+}
+
+.lightbox {
+	position: relative;
+	max-width: min(92vw, 1600px);
+}
+
+.lightbox-img {
+	display: block;
+	max-width: 100%;
+	max-height: 86vh;
+	object-fit: contain;
+	border-radius: 10px;
+	border: 1px solid var(--border);
+}
+
+.lightbox-x {
+	position: absolute;
+	top: 8px;
+	right: 8px;
 }
 
 .modal {

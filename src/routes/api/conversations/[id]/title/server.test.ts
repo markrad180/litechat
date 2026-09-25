@@ -1,14 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { POST } from './+server.js';
 
-// vitest.setup.ts points LITECHAT_CONFIG at a scratch config file, so the
-// fixture never touches the user's real data/config.json.
-const configPath = path.join(process.cwd(), 'data', 'test-config.json');
+// Per-suite scratch config, set before this file's $lib/config import: sibling
+// suites sharing one file would delete each other's config mid-test.
+vi.hoisted(() => {
+	process.env.LITECHAT_CONFIG = `${process.cwd()}/data/test-config-title.json`;
+});
+const configPath = process.env.LITECHAT_CONFIG!;
 const convPath = path.join(process.cwd(), 'data', 'conversations', 'title-test.json');
 
 function fixtureConversation(messages: unknown[]) {
+	mkdirSync(path.dirname(convPath), { recursive: true }); // sibling suites may have deleted the dir
 	writeFileSync(
 		convPath,
 		JSON.stringify({

@@ -2,6 +2,29 @@
 
 All notable changes to LiteChat are documented here.
 
+## [0.3.0] - 2026-09-25
+
+### Added
+
+- Stop generating: while a reply is streaming, the send button becomes a stop button — abort it and the partial reply stays and is saved.
+- Per-model capability probe: selecting a model checks the server for vision support and accepted reasoning efforts (a tiny test image + one-token completion probes, cached per endpoint).
+- Vision chip in the composer dock for models that accept images; it lights up when an image is attached and will ride along with the next message.
+- Image lightbox: click a thumbnail in any message for a full-size view.
+- Image thumbnails on your message appear immediately while the reply streams.
+
+### Changed
+
+- Images attach to the message that added them: each image is sent once, and old turns with images can now be auto-trimmed.
+- Reasoning levels the selected model doesn't accept are dimmed in the picker, and the request is clamped to its accepted set — no more mid-turn 400s from unsupported efforts.
+- Composer: the text box now spans the full width with the attach and send/stop buttons on the row below.
+
+### Fixed
+
+- WebP images are converted to PNG before upload so servers that can't decode WebP don't reject the whole message.
+- Short user messages no longer wrap to two lines.
+- Web search/fetch tools can no longer hang forever (30-second cap) and respond to stop.
+- Confirmed non-vision models reject image attachments with a clear chip instead of a server error.
+
 ## [0.2.1] - 2026-09-25
 
 ### Fixed

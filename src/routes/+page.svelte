@@ -5,6 +5,7 @@
 	import Composer from './components/Composer.svelte';
 	import Settings from './components/Settings.svelte';
 	import About from './components/About.svelte';
+	import Lightbox from './components/Lightbox.svelte';
 	import Onboarding from './components/Onboarding.svelte';
 	import ModelPicker from './components/ModelPicker.svelte';
 	import ReasoningPicker from './components/ReasoningPicker.svelte';
@@ -40,6 +41,7 @@
 	let conversations = $state<ConversationMeta[]>([]);
 	let active = $state<Conversation | null>(null);
 	let streaming = $state(false);
+	let aborter: AbortController | null = null; // in-flight turn; stop() aborts it
 	let sentText = $state(''); // the user's just-sent message, shown before the server round-trip
 	let trimmedNote = $state(''); // set by a 'context' SSE event; cleared on the next send
 	let liveText = $state('');
@@ -119,6 +121,46 @@
 	let webOn = $state(true);
 	let reasoningLevel = $state<ReasoningLevel>('medium');
 	let pending = $state<PendingAttachment[]>([]); // composer attachment chips
+	// Lights the Vision pill: an image is loaded and goes out with the next turn.
+	// 'ready' (not just non-error) so a doc upload's optimistic isImage can't flicker it on.
+	const hasImage = $derived(pending.some((p) => p.isImage && p.status === 'ready'));
+	// Shown in the optimistic bubble while streaming — same markup and URLs as the
+	// post-finalize bubble, so the thumb never "pops in" when the turn settles.
+	const pendingAtts = $derived.by(() => {
+		const conv = active; // const so the guard's narrowing survives the callbacks
+		if (!conv) return [];
+		return pending
+			.filter((p) => p.meta && conv.attachments?.some((a) => a.id === p.meta!.id))
+			.map((p) => ({ ...p.meta!, url: `/api/conversations/${conv.id}/attachments/${p.meta!.id}` }));
+	});
+	let lightbox = $state<{ url: string; name: string } | null>(null);
+
+	// Each spark re-appears at a new random point of the chip outline after it
+	// fades — the position is re-rolled at animation-iteration end, when the
+	// spark is invisible, so the jump never shows. Random side + x along the
+	// long edges lands on the outline of the pill (radius 16px < 20% of width).
+	function repositionSpark(e: AnimationEvent) {
+		const el = e.target as HTMLElement;
+		el.style.setProperty('--x', `${20 + Math.random() * 60}%`);
+		el.style.setProperty('--y', Math.random() < 0.5 ? '0%' : '100%');
+	}
+
+	// ponytail: some model servers (older llama.cpp builds) can't decode WebP and 400
+	// the whole turn — re-encode to PNG in the browser at upload so WebP works
+	// everywhere. Fallback to the original if the canvas can't hold the image
+	// (browsers cap canvas area); the server's 400 then names the real problem.
+	async function webpToPng(file: File): Promise<File> {
+		const bmp = await createImageBitmap(file);
+		const canvas = document.createElement('canvas');
+		canvas.width = bmp.width;
+		canvas.height = bmp.height;
+		canvas.getContext('2d')!.drawImage(bmp, 0, 0);
+		bmp.close();
+		const blob = await new Promise<Blob>((resolve, reject) =>
+			canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png')
+		);
+		return new File([blob], file.name.replace(/\.webp$/i, '.png'), { type: 'image/png', lastModified: file.lastModified });
+	}
 
 	// Attach files to the active conversation (creates one if needed, like send()).
 	// Sequential per-file uploads: each chip fails independently with the server's
@@ -130,12 +172,30 @@
 			if (!active) return;
 		}
 		const convId = active.id;
+		// Confirmed non-vision model: don't ship images upstream — the red chip
+		// says why (docs still upload fine through the same path).
+		const visionOff = config?.vision?.[model] === false;
 		for (const file of files) {
 			const key = crypto.randomUUID();
+			if (file.type.startsWith('image/') && visionOff) {
+				pending = [
+					...pending,
+					{ key, name: file.name, size: file.size, status: 'error', isImage: true, error: `Model “${model}” doesn’t support images` }
+				];
+				continue;
+			}
 			pending = [...pending, { key, name: file.name, size: file.size, status: 'uploading', isImage: true }];
 			try {
+				let toSend = file;
+				if (file.type === 'image/webp') {
+					try {
+						toSend = await webpToPng(file);
+					} catch {
+						// canvas too small for this image — send the original as-is
+					}
+				}
 				const form = new FormData();
-				form.append('file', file);
+				form.append('file', toSend);
 				const res = await fetch(`/api/conversations/${convId}/attachments`, { method: 'POST', body: form });
 				const data = (await res.json().catch(() => null)) as { attachment?: AttachmentMeta; error?: string } | null;
 				if (res.ok && data?.attachment) {
@@ -270,6 +330,29 @@
 	function chooseModel(m: string) {
 		model = m;
 		if (active) void updateConversation({ model: m });
+		void probeModel(m);
+	}
+
+	// Capability probe (vision + accepted reasoning efforts): fire-and-forget for a model
+	// with no conclusive entry. On success it updates the local config copy — the
+	// image attach gate and the reasoning picker react to it. Best-effort:
+	// failures just re-probe next selection.
+	async function probeModel(m: string) {
+		if (!m || !config?.baseUrl) return;
+		const visionKnown = config.vision && m in config.vision;
+		const reasoningKnown = config.reasoning && m in config.reasoning;
+		if (visionKnown && reasoningKnown) return;
+		try {
+			const res = await fetch('/api/models/probe', { method: 'POST', body: JSON.stringify({ model: m }) });
+			if (!res.ok) return;
+			const data = (await res.json()) as { vision?: boolean | null; reasoning?: ReasoningLevel[] | null };
+			if (!config) return;
+			if (data.vision === true || data.vision === false)
+				config = { ...config, vision: { ...config.vision, [m]: data.vision } };
+			if (data.reasoning) config = { ...config, reasoning: { ...config.reasoning, [m]: data.reasoning } };
+		} catch {
+			// network hiccup — next selection retries
+		}
 	}
 
 	async function send(text: string) {
@@ -284,6 +367,8 @@
 		streaming = true;
 		sentText = text; // show it instantly; the post-stream re-read replaces it
 		const history = active.messages; // excludes the new user message; the server appends it
+		const ac = new AbortController();
+		aborter = ac;
 		try {
 			const res = await fetch('/api/chat', {
 				method: 'POST',
@@ -295,7 +380,8 @@
 					// Web toggle: calculator always on, web_search/web_fetch follow the chip.
 					tools: webOn ? undefined : ['calculator'],
 					reasoning: reasoningLevel
-				})
+				}),
+				signal: ac.signal
 			});
 			if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(() => '')}`);
 			const reader = res.body!.getReader();
@@ -329,33 +415,69 @@
 					else if (event === 'error') error = payload.message;
 				}
 			}
-			// Re-read the persisted conversation so tool rows match what's on disk.
-			const fresh = await api<Conversation>(`/api/conversations/${active.id}`);
-			active = fresh;
-			pending = []; // the chips are now part of the persisted user message
-			const convId = fresh.id;
-			// Background: ask the same model (non-reasoning) to name the chat;
-			// the 48-char truncation stays as the offline/failed fallback.
-			if (fresh.title === 'New chat')
-				void (async () => {
-					const t = await api<{ title: string }>(`/api/conversations/${convId}/title`, { method: 'POST' }).catch(
-						() => null
-					);
-					const title = t?.title || text.slice(0, 48);
-					await api(`/api/conversations/${convId}`, { method: 'PUT', body: JSON.stringify({ title }) });
-					if (active?.id === convId) active = { ...active, title };
-					void refreshList();
-				})().catch(() => {});
-			await refreshList();
+			await finalize(text);
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			if (e instanceof DOMException && e.name === 'AbortError') {
+				// User pressed stop — not an error. The live thread (sentText, liveText,
+				// liveTools) is cleared in finally and only lived on screen, while the
+				// server persists exactly this exchange — mirror it into active, with
+				// 'Stopped.' results for unfinished tool calls, as the server does.
+				// A re-read would race that persist and blank the reply.
+				const mirrored: ChatMessage[] = [{ role: 'user', content: text }];
+				if (liveText || liveTools.length)
+					mirrored.push({
+						role: 'assistant',
+						content: liveText,
+					...(liveReasoning ? { reasoning: liveReasoning } : {}),
+					...(liveTools.length
+						? {
+								tool_calls: liveTools.map((t) => ({ id: t.id, name: t.name, arguments: JSON.stringify(t.args) }))
+						  }
+						: {})
+				});
+				for (const t of liveTools)
+					mirrored.push({ role: 'tool', tool_call_id: t.id, name: t.name, content: 'Stopped.' } as ChatMessage);
+				active = { ...active, messages: [...active.messages, ...mirrored] };
+				await finalize(text, true).catch(() => {});
+			} else {
+				error = e instanceof Error ? e.message : String(e);
+			}
 		} finally {
+			aborter = null;
 			streaming = false;
 			sentText = '';
 			liveText = '';
 			liveReasoning = '';
 			liveTools = [];
 		}
+	}
+
+	function stop() {
+		aborter?.abort();
+	}
+
+	// Post-turn sync: re-read the persisted conversation (live text is replaced by
+	// what's on disk, tool rows included), name the chat in the background, refresh.
+	// keepLive (user stop): skip the re-read — the streamed partial is what the
+	// server persists, and re-reading races its write and can blank the reply.
+	async function finalize(text: string, keepLive = false) {
+		const fresh = keepLive ? active! : await api<Conversation>(`/api/conversations/${active!.id}`);
+		if (!keepLive) active = fresh;
+		pending = []; // the chips are now part of the persisted user message
+		const convId = fresh.id;
+		// Background: ask the same model (non-reasoning) to name the chat;
+		// the 48-char truncation stays as the offline/failed fallback.
+		if (fresh.title === 'New chat')
+			void (async () => {
+				const t = await api<{ title: string }>(`/api/conversations/${convId}/title`, { method: 'POST' }).catch(
+					() => null
+				);
+				const title = t?.title || text.slice(0, 48);
+				await api(`/api/conversations/${convId}`, { method: 'PUT', body: JSON.stringify({ title }) });
+				if (active?.id === convId) active = { ...active, title };
+				void refreshList();
+			})().catch(() => {});
+		await refreshList();
 	}
 
 	function toolResultsFor(msg: ChatMessage): Record<string, string> {
@@ -405,6 +527,7 @@
 		const cfg = await api<EndpointConfig>('/api/config');
 		config = cfg;
 		model = cfg.defaultModel ?? '';
+		void probeModel(model);
 		void enterApp();
 	}
 
@@ -439,6 +562,7 @@
 		// Config arrived with the page data (load in +page.ts).
 		if (!onboard) {
 			model = config?.defaultModel ?? '';
+			void probeModel(model);
 			void enterApp();
 		}
 	});
@@ -523,10 +647,19 @@
 						</div>
 					{:else}
 						{#each renderItems as item (item.key)}
-							<Message message={item.msg} results={toolResultsFor(item.msg)} attachments={attachmentsFor(item.msg)} />
+							<Message
+								message={item.msg}
+								results={toolResultsFor(item.msg)}
+								attachments={attachmentsFor(item.msg)}
+								onThumbClick={(a) => (lightbox = { url: a.url, name: a.name })}
+							/>
 						{/each}
 						{#if sentText}
-							<Message message={{ role: 'user', content: sentText }} />
+							<Message
+								message={{ role: 'user', content: sentText }}
+								attachments={pendingAtts}
+								onThumbClick={(a) => (lightbox = { url: a.url, name: a.name })}
+							/>
 						{/if}
 						{#if streaming}
 							<Message
@@ -564,8 +697,22 @@
 							<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10" /><path d="M2 12h20" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg>
 							Web
 						</button>
+						{#if config?.vision?.[model] === true}
+							<span class="vision-chip" class:on={hasImage} title={hasImage ? 'Image attached — included with your next message' : 'This model accepts image attachments'}>
+								<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" /></svg>
+								Vision
+								{#if hasImage}
+									<!-- Sparks bloom on the rim at drifting phases (mismatched durations
+									     never re-sync) so the constellation reads as random. -->
+									<span class="spark" aria-hidden="true" onanimationiteration={repositionSpark} style="--x: 78%; --y: 0%; --s: 1.6; --i: 0.95; --d: 3.1s; --dl: 0.4s"></span>
+									<span class="spark" aria-hidden="true" onanimationiteration={repositionSpark} style="--x: 16%; --y: 100%; --s: 1; --i: 0.75; --d: 4.7s; --dl: 1.8s"></span>
+									<span class="spark" aria-hidden="true" onanimationiteration={repositionSpark} style="--x: 48%; --y: 0%; --s: 0.7; --i: 0.55; --d: 5.9s; --dl: 3.2s"></span>
+								{/if}
+							</span>
+						{/if}
 						<ReasoningPicker
 							level={reasoningLevel}
+							supported={config?.reasoning?.[model]}
 							onselect={(l) => {
 								reasoningLevel = l;
 								if (active) void updateConversation({ reasoning: l });
@@ -574,7 +721,8 @@
 					</div>
 					<Composer
 						onsubmit={send}
-						disabled={streaming}
+						streaming={streaming}
+						onstop={stop}
 						placeholder="Message · Enter to send · Shift+Enter for a new line"
 						attachments={pending}
 						onattach={attachFiles}
@@ -598,6 +746,9 @@
 	{/if}
 	{#if aboutOpen}
 		<About onclose={() => (aboutOpen = false)} />
+	{/if}
+	{#if lightbox}
+		<Lightbox url={lightbox.url} name={lightbox.name} onclose={() => (lightbox = null)} />
 	{/if}
 {#if pendingDelete}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->

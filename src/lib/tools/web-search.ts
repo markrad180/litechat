@@ -53,12 +53,17 @@ function stripTags(s: string): string {
 		.trim();
 }
 
+// Search can stall forever — cap it, and honor the turn's stop signal.
+const SEARCH_TIMEOUT_MS = 30_000;
+
 export async function webSearch(
 	query: string,
-	fetchImpl: typeof fetch = fetch
+	fetchImpl: typeof fetch = fetch,
+	signal?: AbortSignal
 ): Promise<{ summary: string; content: string }> {
 	const res = await fetchImpl(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, {
-		headers: { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+		headers: { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
+		signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(SEARCH_TIMEOUT_MS)]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS)
 	});
 	if (!res.ok) throw new Error(`search failed with HTTP ${res.status}`);
 	const results = parseBing(await res.text()).slice(0, 5);

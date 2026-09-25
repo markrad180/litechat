@@ -16,7 +16,13 @@ export async function PUT({ request }: { request: Request }) {
 	// value — onboarding step 1 sends only baseUrl+apiKey and must not wipe the
 	// cached model list.
 	const patch = (await request.json().catch(() => ({}))) as Partial<EndpointConfig>;
-	const next = { ...loadConfig(), ...patch };
+	const prev = loadConfig();
+	const next = { ...prev, ...patch };
+	// Probe results (vision + reasoning max) are per-endpoint: a changed baseUrl invalidates them.
+	if (patch.baseUrl !== undefined && patch.baseUrl !== prev.baseUrl) {
+		delete next.vision;
+		delete next.reasoning;
+	}
 	if (typeof next.baseUrl !== 'string' || !next.baseUrl.trim()) {
 		return json({ error: 'baseUrl must be a non-empty string' }, { status: 400 });
 	}

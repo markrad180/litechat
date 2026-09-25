@@ -4,10 +4,12 @@
 	let {
 		level,
 		disabled = false,
+		supported,
 		onselect
 	}: {
 		level: ReasoningLevel;
 		disabled?: boolean;
+		supported?: ReasoningLevel[]; // model's probed accepted efforts; unlisted levels are dimmed
 		onselect: (l: ReasoningLevel) => void;
 	} = $props();
 
@@ -18,6 +20,8 @@
 		{ value: 'high', label: 'High' },
 		{ value: 'xhigh', label: 'Ultra' }
 	];
+	// 'off' is always selectable — it's a client choice, never sent upstream.
+	const unsupported = (l: ReasoningLevel) => supported !== undefined && l !== 'off' && !supported.includes(l);
 
 	let open = $state(false);
 	let wrapEl: HTMLDivElement | null = $state(null);
@@ -62,7 +66,15 @@
 	{#if open}
 		<div class="reasoning-menu" role="listbox">
 			{#each OPTIONS as o (o.value)}
-				<button class="model-row" class:current={o.value === level} role="option" aria-selected={o.value === level} onclick={() => pick(o.value)}>{o.label}</button>
+				<button
+					class="model-row"
+					class:current={o.value === level}
+					role="option"
+					aria-selected={o.value === level}
+					disabled={unsupported(o.value)}
+					title={unsupported(o.value) ? 'Not supported by this model' : undefined}
+					onclick={() => pick(o.value)}
+				>{o.label}</button>
 			{/each}
 		</div>
 	{/if}

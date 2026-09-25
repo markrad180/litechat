@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import type { Conversation, ConversationMeta, ReasoningLevel } from '$lib/types';
 
 // Run from the project root: `npm run dev` or `node build`.
-const DATA_DIR = path.join(process.cwd(), 'data', 'conversations');
+// LITECHAT_DATA_DIR (e2e only): a separate store so the suite never shares the user's chats.
+const DATA_DIR = process.env.LITECHAT_DATA_DIR ?? path.join(process.cwd(), 'data', 'conversations');
 
 function fileFor(id: string): string {
 	if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(id)) throw new Error(`Invalid conversation id: ${id}`);

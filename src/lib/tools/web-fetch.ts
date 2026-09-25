@@ -51,12 +51,19 @@ function assertPublicUrl(url: string): void {
 	}
 }
 
+// A page load can stall forever — cap it, and honor the turn's stop signal.
+const FETCH_TIMEOUT_MS = 30_000;
+
 export async function webFetch(
 	url: string,
-	fetchImpl: typeof fetch = fetch
+	fetchImpl: typeof fetch = fetch,
+	signal?: AbortSignal
 ): Promise<{ summary: string; content: string }> {
 	assertPublicUrl(url);
-	const res = await fetchImpl(url, { headers: { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' } });
+	const res = await fetchImpl(url, {
+		headers: { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
+		signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]) : AbortSignal.timeout(FETCH_TIMEOUT_MS)
+	});
 	if (!res.ok) throw new Error(`fetch failed with HTTP ${res.status}`);
 	const body = await res.text();
 	let text = htmlToText(body);

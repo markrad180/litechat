@@ -1,6 +1,7 @@
 import { runAgent, type AttachmentInput } from '../../../server/agent.js';
 import { getConversation, updateConversation } from '../../../server/conversations.js';
 import { readAttachmentBytes, readAttachmentText } from '../../../server/attachments.js';
+import { loadConfig, saveConfig } from '$lib/config.js';
 import type { Message, ReasoningLevel } from '$lib/types';
 
 interface ChatRequest {
@@ -25,14 +26,14 @@ async function attachmentsFor(conversationId: string): Promise<AttachmentInput[]
 				console.warn(`attachment ${a.id} (${a.name}) missing on disk — skipped`);
 				continue;
 			}
-			out.push({ name: a.name, isImage: true, dataUri: `data:${a.mime};base64,${Buffer.from(bytes).toString('base64')}` });
+			out.push({ id: a.id, name: a.name, isImage: true, dataUri: `data:${a.mime};base64,${Buffer.from(bytes).toString('base64')}` });
 		} else {
 			const text = await readAttachmentText(conversationId, a);
 			if (!text) {
 				console.warn(`no extractable text for attachment ${a.id} (${a.name}) — skipped`);
 				continue;
 			}
-			out.push({ name: a.name, text, isImage: false });
+			out.push({ id: a.id, name: a.name, text, isImage: false });
 		}
 	}
 	return out;
@@ -54,44 +55,96 @@ export async function POST({ request }: { request: Request }) {
 	}
 
 	const encoder = new TextEncoder();
+	// Client stop / closed window cancels the stream — forward that to the agent so
+	// the in-flight model call and tools die, and the partial turn is kept.
+	const ac = new AbortController();
 	const stream = new ReadableStream({
 		async start(controller) {
-			// A closed window cancels the stream; enqueue/close on a cancelled
-			// controller throws, so guard both. (controller.desired is in the
-			// Web Streams spec but not in TS's DOM lib.)
-			const desired = () => (controller as unknown as { desired: string }).desired;
+			// desiredSize is null once the stream is closed/cancelled; enqueue/close
+			// on a cancelled controller throw, so guard both.
 			const emit = (event: string, data: unknown) => {
-				if (desired() !== 'writable') return;
-				controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+				if (controller.desiredSize === null) return;
+				try {
+					controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+				} catch {
+					// reader went away; the finally below closes out
+				}
 			};
 			try {
-				const appended = await runAgent({
-					...agentOpts,
-					messages: [...messages, { role: 'user', content: newUser }],
-					...(attachments.length ? { attachments } : {}),
-					emit
-				});
+				let appended: Message[] = [];
+				let newUserMsg: Message = { role: 'user', content: newUser };
 				if (conversationId) {
+					// Persist the user's own message up front: it's what the model sees
+					// (attachmentIds) and what title generation reads, and it's safe to
+					// write before the turn — a stopped/errored turn still gets its user msg.
 					const conv = await getConversation(conversationId);
-					// persist the user's own message too — runAgent only returns the assistant/tool replies.
-					// attachmentIds records what the model saw at send time; content stays a plain string.
-					const userMsg: Message = {
+					// Stamp only the attachments new since the last send: they're the ones
+					// this message was added with (wire pass + bubble render). Earlier
+					// messages keep their own stamps; legacy all-ids stamps are harmless —
+					// the agent's wire dedup ships each image once.
+					const seen = new Set(conv.messages.flatMap((m) => m.attachmentIds ?? []));
+					const fresh = (conv.attachments ?? []).filter((a) => !seen.has(a.id)).map((a) => a.id);
+					newUserMsg = {
 						role: 'user',
 						content: newUser,
-						...(conv.attachments?.length ? { attachmentIds: conv.attachments.map((a) => a.id) } : {})
+						...(fresh.length ? { attachmentIds: fresh } : {})
 					};
-					await updateConversation(conversationId, { messages: [...conv.messages, userMsg, ...appended] });
+					await updateConversation(conversationId, { messages: [...conv.messages, newUserMsg] });
 				}
-				emit('done', {});
+				appended = await runAgent({
+					...agentOpts,
+					messages: [...messages, newUserMsg],
+					...(attachments.length ? { attachments } : {}),
+					signal: ac.signal,
+					emit
+				});
+				if (conversationId && appended.length) {
+					const conv = await getConversation(conversationId);
+					await updateConversation(conversationId, { messages: [...conv.messages, ...appended] });
+				}
+				if (!ac.signal.aborted) emit('done', {});
 			} catch (e) {
 				let message = e instanceof Error ? e.message : String(e);
 				// A non-vision model rejects image content with a 4xx — name it, don't dump the server's raw error.
-				if (attachments.some((a) => a.isImage) && /HTTP 4\d\d/.test(message))
+				if (attachments.some((a) => a.isImage) && /HTTP 4\d\d/.test(message)) {
 					message = `This model may not support images. Server said: ${message}`;
+					// Evidence invalidation: a real image turn just 4xx'd, so the probe's
+					// cached claim is suspect. Delete (not write false — the 4xx may be an
+					// oversized image) so the next model selection re-probes.
+					try {
+						const cfg = loadConfig();
+						if (cfg.vision && agentOpts.model in cfg.vision) {
+							delete cfg.vision[agentOpts.model];
+							saveConfig(cfg);
+						}
+					} catch {
+						// config read/write failure doesn't mask the turn error
+					}
+				}
+				// A template that rejects the (clamped) effort 4xxs the turn — same
+				// evidence invalidation as images: delete so the next selection re-probes.
+				if (agentOpts.reasoning && agentOpts.reasoning !== 'off' && /HTTP 4\d\d/.test(message)) {
+					try {
+						const cfg = loadConfig();
+						if (cfg.reasoning && agentOpts.model in cfg.reasoning) {
+							delete cfg.reasoning[agentOpts.model];
+							saveConfig(cfg);
+						}
+					} catch {
+						// config read/write failure doesn't mask the turn error
+					}
+				}
 				emit('error', { message });
 			} finally {
-				if (desired() === 'writable') controller.close();
+				try {
+					controller.close();
+				} catch {
+					// already closed (cancel raced us)
+				}
 			}
+		},
+		cancel() {
+			ac.abort();
 		}
 	});
 

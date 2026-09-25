@@ -8,13 +8,15 @@
 		tools = [],
 		results = {},
 		live = false,
-		attachments = []
+		attachments = [],
+		onThumbClick
 	}: {
 		message: ChatMessage;
 		tools?: { id: string; name: string; args: Record<string, unknown>; summary?: string }[];
 		results?: Record<string, string>;
 		live?: boolean;
 		attachments?: (AttachmentMeta & { url: string })[]; // persisted attachments for display
+		onThumbClick?: (a: AttachmentMeta & { url: string }) => void; // opens the lightbox
 	} = $props();
 
 	// Content is a string wherever persisted; ContentBlock[] is wire-only, so the
@@ -150,7 +152,16 @@
 					{#each attachments as a (a.id)}
 						{#if a.isImage}
 							{#if !brokenThumbs[a.id]}
-								<img class="att-thumb" src={a.url} alt={a.name} loading="lazy" onerror={() => (brokenThumbs[a.id] = true)} />
+								<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+								<!-- svelte-ignore a11y_click_events_have_key_events -->
+								<img
+									class="att-thumb"
+									src={a.url}
+									alt={a.name}
+									loading="lazy"
+									onclick={() => onThumbClick?.(a)}
+									onerror={() => (brokenThumbs[a.id] = true)}
+								/>
 							{:else}
 								<span class="att-chip error">{a.name} — file unavailable</span>
 							{/if}

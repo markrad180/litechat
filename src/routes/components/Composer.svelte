@@ -4,6 +4,8 @@
 	let {
 		onsubmit,
 		disabled = false,
+		streaming = false,
+		onstop,
 		placeholder = 'Message',
 		attachments = [],
 		onattach,
@@ -13,6 +15,8 @@
 	}: {
 		onsubmit: (text: string) => void;
 		disabled?: boolean;
+		streaming?: boolean; // a turn is in flight — the send button becomes a stop button
+		onstop?: () => void;
 		placeholder?: string;
 		attachments?: PendingAttachment[]; // pre-upload + just-uploaded chips
 		onattach?: (files: File[]) => void;
@@ -114,7 +118,11 @@
 						<span class="att-name">{a.name}</span>
 						<span class="att-reason">{a.error}</span>
 					{:else}
-						<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+						{#if a.isImage}
+							<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" /></svg>
+						{:else}
+							<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+						{/if}
 						<span class="att-name">{a.name}</span>
 					{/if}
 					<button class="att-x" onclick={() => onremove?.(a.key)} aria-label="Remove {a.name}">✕</button>
@@ -122,6 +130,16 @@
 			{/each}
 		</div>
 	{/if}
+	<textarea
+		bind:this={ta}
+		bind:value={text}
+		style:min-height={minH !== null ? `${minH}px` : undefined}
+		style:max-height={minH !== null ? `${minH}px` : undefined}
+		onkeydown={onKeydown}
+		{placeholder}
+		{disabled}
+		aria-label="Message"
+	></textarea>
 	<div class="composer-line">
 		<button
 			class="icon-btn attach-btn"
@@ -132,20 +150,16 @@
 		>
 			<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
 		</button>
-		<textarea
-			bind:this={ta}
-			bind:value={text}
-			style:min-height={minH !== null ? `${minH}px` : undefined}
-			style:max-height={minH !== null ? `${minH}px` : undefined}
-			onkeydown={onKeydown}
-			{placeholder}
-			{disabled}
-			aria-label="Message"
-		></textarea>
 		<div class="composer-actions">
-			<button class="send-btn" onclick={submit} disabled={disabled || !text.trim()} aria-label="Send">
-				<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
-			</button>
+			{#if streaming}
+				<button class="send-btn" onclick={onstop} aria-label="Stop generating" title="Stop generating">
+					<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+				</button>
+			{:else}
+				<button class="send-btn" onclick={submit} disabled={disabled || !text.trim()} aria-label="Send">
+					<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+				</button>
+			{/if}
 		</div>
 	</div>
 	<input class="file-input" type="file" multiple bind:this={fileInput} onchange={onFileChange} aria-hidden="true" tabindex="-1" />

@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { rmSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
 import { GET } from './+server.js';
 
-// vitest.setup.ts points LITECHAT_CONFIG at this scratch file, so the test
-// baseUrl never touches the user's real data/config.json (GET() also caches
-// model results into it).
-const testConfig = path.join(process.cwd(), 'data', 'test-config.json');
+// Per-suite scratch config, set before this file's $lib/config import: sibling
+// suites sharing one file would delete each other's config mid-test. GET() also
+// caches model results into it.
+vi.hoisted(() => {
+	process.env.LITECHAT_CONFIG = `${process.cwd()}/data/test-config-models.json`;
+});
+const testConfig = process.env.LITECHAT_CONFIG!;
 
 beforeAll(() => {
 	writeFileSync(testConfig, JSON.stringify({ name: '', baseUrl: 'http://test/v1', apiKey: '', models: [], defaultModel: '' }));

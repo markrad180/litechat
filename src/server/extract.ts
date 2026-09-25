@@ -44,8 +44,10 @@ function unsupported(name: string): string {
 }
 
 async function pdfText(bytes: Uint8Array): Promise<string> {
-	// unpdf 1.x returns text per-page by default; mergePages gives one string
-	const { text } = await extractText(bytes, { mergePages: true });
+	// unpdf 1.x returns text per-page by default; mergePages gives one string.
+	// Copy the bytes: unpdf detaches the underlying ArrayBuffer (pdf.js worker
+	// transfer), which would break the caller's copy after extract() returns.
+	const { text } = await extractText(new Uint8Array(bytes), { mergePages: true });
 	return text;
 }
 

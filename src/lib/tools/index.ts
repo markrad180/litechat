@@ -49,18 +49,22 @@ export const toolSchemas = [
 
 type ToolArgs = Record<string, unknown>;
 
-export async function executeTool(name: string, args: ToolArgs): Promise<{ summary: string; content: string }> {
+export async function executeTool(
+	name: string,
+	args: ToolArgs,
+	signal?: AbortSignal
+): Promise<{ summary: string; content: string }> {
 	try {
 		switch (name) {
 			case 'web_search': {
 				const query = String(args.query ?? '');
 				if (!query) throw new Error('web_search requires a "query" argument');
-				return await webSearch(query);
+				return await webSearch(query, fetch, signal);
 			}
 			case 'web_fetch': {
 				const url = String(args.url ?? '');
 				if (!url) throw new Error('web_fetch requires a "url" argument');
-				return await webFetch(url);
+				return await webFetch(url, fetch, signal);
 			}
 			case 'calculator': {
 				const expression = String(args.expression ?? '');
@@ -71,6 +75,8 @@ export async function executeTool(name: string, args: ToolArgs): Promise<{ summa
 				throw new Error(`unknown tool "${name}"`);
 		}
 	} catch (e) {
+		// A user stop is not a tool failure — the loop decides what to keep.
+		if (e instanceof DOMException && e.name === 'AbortError') throw e;
 		// Tool failures are reported to the model, not thrown — the loop keeps going.
 		return { summary: `${name} failed`, content: `Error: ${e instanceof Error ? e.message : String(e)}` };
 	}

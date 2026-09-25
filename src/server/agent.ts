@@ -5,6 +5,7 @@ import type { ContentBlock, EndpointConfig, Message, ReasoningLevel, ToolCall } 
 
 // What the chat route hands runAgent for each conversation attachment.
 export interface AttachmentInput {
+	id: string; // matches Message.attachmentIds
 	name: string;
 	text?: string; // extracted text (docs)
 	dataUri?: string; // images, data:<mime>;base64,…
@@ -46,6 +47,23 @@ export function extractReasoning(d?: { reasoning?: unknown; reasoning_content?: 
 	return typeof r === 'string' ? r : '';
 }
 
+const REASONING_RANK: Record<ReasoningLevel, number> = { off: 0, low: 1, medium: 2, high: 3, xhigh: 4 };
+
+// Clamp the requested effort to the model's probed accepted set so a template
+// that rejects e.g. 'high' never 400s mid-turn. Closest supported level below
+// the request wins; with nothing below (e.g. requested 'low', only 'medium'
+// accepted) the smallest upgrade goes — degrading further is impossible.
+// Unprobed models (no set) pass through. Pure.
+export function clampReasoning(requested?: ReasoningLevel, supported?: ReasoningLevel[]): ReasoningLevel | undefined {
+	if (!requested || requested === 'off') return requested; // 'off' is a client choice, never sent upstream
+	if (!supported?.length) return supported ? 'off' : requested; // [] = probed, none accepted
+	if (supported.includes(requested)) return requested;
+	const r = REASONING_RANK[requested];
+	const below = supported.filter((l) => REASONING_RANK[l] < r).sort((a, b) => REASONING_RANK[b] - REASONING_RANK[a]);
+	if (below.length) return below[0];
+	return [...supported].sort((a, b) => REASONING_RANK[a] - REASONING_RANK[b])[0];
+}
+
 interface StreamDelta {
 	content?: string | null;
 	tool_calls?: ToolCallDelta[];
@@ -66,7 +84,7 @@ type WireMessage = Omit<Message, 'tool_calls'> & { tool_calls?: WireToolCall[] }
 
 export function toWire(messages: Message[]): WireMessage[] {
 	return messages.map((m): WireMessage => {
-		const { reasoning, reasoningLevel, stats, ...rest } = m; // display-only, stays off the wire
+		const { reasoning, reasoningLevel, stats, attachmentIds, ...rest } = m; // display-only, stays off the wire
 		if (m.tool_calls) {
 			return {
 				...rest,
@@ -137,7 +155,8 @@ async function streamUpstream(
 	endpoint: EndpointConfig,
 	body: unknown,
 	emit: Emit,
-	reasoningLevel?: ReasoningLevel
+	reasoningLevel?: ReasoningLevel,
+	signal?: AbortSignal
 ): Promise<{
 	content: string;
 	toolCalls: ToolCall[];
@@ -152,7 +171,8 @@ async function streamUpstream(
 			'content-type': 'application/json',
 			...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {})
 		},
-		body: JSON.stringify(body)
+		body: JSON.stringify(body),
+		signal
 	});
 
 	if (!res.ok || !res.body) {
@@ -171,48 +191,53 @@ async function streamUpstream(
 	const decoder = new TextDecoder();
 	const reader = res.body.getReader();
 
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		buffer += decoder.decode(value, { stream: true });
-		const lines = buffer.split('\n');
-		buffer = lines.pop() ?? '';
-		for (const line of lines) {
-			const trimmed = line.trim();
-			if (!trimmed.startsWith('data:')) continue;
-			const payload = trimmed.slice(5).trim();
-			if (payload === '[DONE]') continue;
-			let json: {
-				choices?: { delta?: StreamDelta; message?: StreamDelta }[];
-				usage?: { prompt_tokens?: number; completion_tokens?: number };
-			};
-			try {
-				json = JSON.parse(payload);
-			} catch {
-				continue; // partial frame; the rest arrives in the next chunk
-			}
-			const delta = json.choices?.[0]?.delta;
-			if (delta?.content) {
-				content += delta.content;
-				emit('token', { content: delta.content });
-			}
-			if (delta?.tool_calls) accumulateToolCalls(calls, delta.tool_calls);
-			// llama.cpp emits a trailing frame with usage (stream_options.include_usage).
-			if (json.usage) {
-				promptTokens += json.usage.prompt_tokens ?? 0;
-				completionTokens += json.usage.completion_tokens ?? 0;
-			}
-			// Thinking can arrive in the delta or in a non-delta message frame.
-			// 'off' suppresses it: servers may think anyway, the display contract is off ⇒ none.
-			const r =
-				reasoningLevel === 'off'
-					? ''
-					: extractReasoning(delta) || extractReasoning(json.choices?.[0]?.message);
-			if (r) {
-				reasoning += r;
-				emit('reasoning', { content: r });
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			const lines = buffer.split('\n');
+			buffer = lines.pop() ?? '';
+			for (const line of lines) {
+				const trimmed = line.trim();
+				if (!trimmed.startsWith('data:')) continue;
+				const payload = trimmed.slice(5).trim();
+				if (payload === '[DONE]') continue;
+				let json: {
+					choices?: { delta?: StreamDelta; message?: StreamDelta }[];
+					usage?: { prompt_tokens?: number; completion_tokens?: number };
+				};
+				try {
+					json = JSON.parse(payload);
+				} catch {
+					continue; // partial frame; the rest arrives in the next chunk
+				}
+				const delta = json.choices?.[0]?.delta;
+				if (delta?.content) {
+					content += delta.content;
+					emit('token', { content: delta.content });
+				}
+				if (delta?.tool_calls) accumulateToolCalls(calls, delta.tool_calls);
+				// llama.cpp emits a trailing frame with usage (stream_options.include_usage).
+				if (json.usage) {
+					promptTokens += json.usage.prompt_tokens ?? 0;
+					completionTokens += json.usage.completion_tokens ?? 0;
+				}
+				// Thinking can arrive in the delta or in a non-delta message frame.
+				// 'off' suppresses it: servers may think anyway, the display contract is off ⇒ none.
+				const r =
+					reasoningLevel === 'off'
+						? ''
+						: extractReasoning(delta) || extractReasoning(json.choices?.[0]?.message);
+				if (r) {
+					reasoning += r;
+					emit('reasoning', { content: r });
+				}
 			}
 		}
+	} catch (e) {
+		// User stop: keep what streamed so far instead of failing the turn.
+		if (!signal?.aborted) throw e;
 	}
 
 	return {
@@ -230,6 +255,7 @@ export async function runAgent(opts: {
 	tools?: string[]; // tool names to enable; undefined = all
 	reasoning?: ReasoningLevel;
 	attachments?: AttachmentInput[]; // conversation attachments to stuff in
+	signal?: AbortSignal; // user stop: resolve with the partial turn instead of throwing
 	emit: Emit;
 }): Promise<Message[]> {
 	const endpoint = loadConfig();
@@ -253,21 +279,53 @@ export async function runAgent(opts: {
 			});
 			if (stuffed.truncated) opts.emit('context', { trimmed: 0, docsTruncated: true, docsOmittedChars: stuffed.omitted });
 		}
-		// Images ride on the sending turn only; older turns were trimmed or already saw them.
-		const images = opts.attachments.filter((a) => a.isImage && a.dataUri);
-		const last = messages[messages.length - 1];
-		if (images.length && last?.role === 'user' && typeof last.content === 'string') {
-			const blocks: ContentBlock[] = [
-				{ type: 'text', text: last.content },
-				...images.map((a): ContentBlock => ({ type: 'image_url', image_url: { url: a.dataUri! } }))
-			];
-			messages[messages.length - 1] = { ...last, content: blocks };
+		// Images ride the user message that added them (stamped attachmentIds): trimHistory
+		// can evict them with old turns, each image ships once, and the history prefix stays
+		// byte-stable for prompt caching. Dedup in message order also covers legacy
+		// conversations stamped with all ids on every message.
+		// ponytail: config `vision` map (tiny-image probe) is the gate — a confirmed
+		// non-vision model gets text-only; unprobed models are optimistic.
+		if (endpoint.vision?.[opts.model] !== false) {
+			const byId = new Map(opts.attachments.filter((a) => a.isImage && a.dataUri).map((a) => [a.id, a]));
+			const seen = new Set<string>();
+			let ordinal = 0; // attachment order across the conversation — highest is the newest
+			let shipped = 0;
+			for (let i = 0; i < messages.length; i++) {
+				const m = messages[i];
+				if (m.role !== 'user' || typeof m.content !== 'string' || !m.attachmentIds?.length) continue;
+				const imgs = m.attachmentIds.filter((id) => byId.has(id) && !seen.has(id)).map((id) => byId.get(id)!);
+				if (!imgs.length) continue;
+				for (const a of imgs) seen.add(a.id);
+				shipped += imgs.length;
+				const labels = imgs.map((a) => `[Picture ${++ordinal}: ${a.name}]`).join('\n');
+				messages[i] = {
+					...m,
+					content: [
+						{ type: 'text', text: m.content ? `${m.content}\n\n${labels}` : labels },
+						...imgs.map((a): ContentBlock => ({ type: 'image_url', image_url: { url: a.dataUri! } }))
+					]
+				};
+			}
+			// A lone "the picture" in a new turn is ambiguous once 2+ pictures ship — pin it
+			// to the newest (highest ordinal) so a weak model doesn't default to the first.
+			// Wire-only and constant: the stable prefix survives past the one-time rewrite
+			// when the 2nd image lands, and the note never changes after.
+			if (shipped >= 2)
+				messages.unshift({
+					role: 'system',
+					content:
+						'Images are labeled [Picture N: name] in the order they were attached. ' +
+						'When the user refers to a single image ("this image", "the picture", "that photo") ' +
+						'without naming which, they mean the most recently attached one (the highest N). ' +
+						'When they ask about several images, use all of them.'
+				});
 		}
 	}
 	const t0 = Date.now();
 	let promptTokens = 0;
 	let completionTokens = 0;
-	const level = opts.reasoning;
+	// Clamp to the model's probed max — unprobed models (no config entry) pass through.
+	const level = clampReasoning(opts.reasoning, endpoint.reasoning?.[opts.model]);
 
 	// round MAX_TOOL_ROUNDS is the guaranteed final answer: tools stripped, so the model
 	// can't burn another round — the user always gets a reply, not a "stopped" note.
@@ -282,28 +340,49 @@ export async function runAgent(opts: {
 			// nudge goes on the wire only — it isn't part of the persisted history
 			wire.push({ role: 'system', content: 'Tool-round limit reached. Answer the user now with the information gathered so far.' });
 		}
-		const {
-			content,
-			reasoning,
-			toolCalls,
-			promptTokens: pt,
-			completionTokens: ct
-		} = await streamUpstream(
-			endpoint,
-			{
-				model: opts.model,
-				messages: wire,
-				tools: final ? [] : opts.tools ? filterTools(opts.tools) : toolSchemas,
-				// ponytail: pass-through; the server decides validity (incl. non-standard 'xhigh')
-				...(level && level !== 'off' ? { reasoning_effort: level } : {}),
-				stream_options: { include_usage: true }, // per-turn stats; servers that ignore it just omit usage
-				stream: true
-			},
-			opts.emit,
-			level
-		);
+		let stream: Awaited<ReturnType<typeof streamUpstream>>;
+		try {
+			stream = await streamUpstream(
+				endpoint,
+				{
+					model: opts.model,
+					messages: wire,
+					tools: final ? [] : opts.tools ? filterTools(opts.tools) : toolSchemas,
+					// Already clamped to the model's probed max; unprobed models pass through
+					...(level && level !== 'off' ? { reasoning_effort: level } : {}),
+					stream_options: { include_usage: true }, // per-turn stats; servers that ignore it just omit usage
+					stream: true
+				},
+				opts.emit,
+				level,
+				opts.signal
+			);
+		} catch (e) {
+			if (!opts.signal?.aborted) throw e;
+			// stop landed between rounds — keep what the earlier rounds produced
+			return appended;
+		}
+		const { content, reasoning, toolCalls, promptTokens: pt, completionTokens: ct } = stream;
 		promptTokens += pt;
 		completionTokens += ct;
+
+		if (opts.signal?.aborted) {
+			// Stop mid-stream: keep the partial answer. Unanswered tool calls get a
+			// synthetic result — servers reject a tool_calls message with no results.
+			if (content || toolCalls.length) {
+				appended.push({
+					role: 'assistant',
+					content,
+					...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+					...(reasoning && level && level !== 'off'
+						? { reasoning, reasoningLevel: level }
+						: {})
+				});
+				for (const tc of toolCalls)
+					appended.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: 'Stopped.' } as Message);
+			}
+			return appended;
+		}
 
 		if (toolCalls.length === 0) {
 			const msg: Message = {
@@ -331,20 +410,30 @@ export async function runAgent(opts: {
 		messages.push(assistant);
 		appended.push(assistant);
 
-		const results = await Promise.all(
-			toolCalls.map(async (tc) => {
-				let args: Record<string, unknown>;
-				try {
-					args = JSON.parse(tc.arguments || '{}');
-				} catch {
-					args = {};
-				}
-				opts.emit('tool_call', { id: tc.id, name: tc.name, args });
-				const result = await executeTool(tc.name, args);
-				opts.emit('tool_result', { id: tc.id, summary: result.summary });
-				return { role: 'tool', tool_call_id: tc.id, name: tc.name, content: result.content } as Message;
-			})
-		);
+		let results: Message[];
+		try {
+			results = await Promise.all(
+				toolCalls.map(async (tc) => {
+					let args: Record<string, unknown>;
+					try {
+						args = JSON.parse(tc.arguments || '{}');
+					} catch {
+						args = {};
+					}
+					opts.emit('tool_call', { id: tc.id, name: tc.name, args });
+					const result = await executeTool(tc.name, args, opts.signal);
+					opts.emit('tool_result', { id: tc.id, summary: result.summary });
+					return { role: 'tool', tool_call_id: tc.id, name: tc.name, content: result.content } as Message;
+				})
+			);
+		} catch (e) {
+			if (!opts.signal?.aborted) throw e;
+			// Stop mid-tool-round: the assistant tool_calls message above needs results
+			// or the next turn 400s — answer every call with a stub.
+			results = toolCalls.map(
+				(tc) => ({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: 'Stopped.' } as Message)
+			);
+		}
 		messages.push(...results);
 		appended.push(...results);
 	}

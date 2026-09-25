@@ -8,7 +8,7 @@ export const ssr = false;
 // The on-disk config is the single source of truth for all settings. load() runs
 // client-side (ssr = false) before the first render, so the stored theme/accent
 // apply with no flash and no browser-storage cache.
-export const load: PageLoad = async () => {
+export const load: PageLoad = async ({ fetch }) => {
 	// A corrupt config.json 500s with an HTML body — don't brick the page:
 	// fall through to onboarding, where the endpoint can be re-entered.
 	let cfg: EndpointConfig;

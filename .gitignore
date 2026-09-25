@@ -34,3 +34,10 @@ vite.config.ts.timestamp-*
 
 # Run script
 server.pid
+
+# Playwright
+test-results/
+playwright-report/
+
+# Claude Code
+.claude/

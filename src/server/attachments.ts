@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { AttachmentMeta } from '$lib/types';
 import { extract } from './extract.js';
 
-const DATA_DIR = path.join(process.cwd(), 'data', 'conversations');
+const DATA_DIR = process.env.LITECHAT_DATA_DIR ?? path.join(process.cwd(), 'data', 'conversations');
 
 // Upload limits — one place, echoed verbatim into the 400 messages the UI shows.
 export const LIMITS = {
