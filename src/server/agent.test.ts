@@ -452,4 +452,47 @@ describe('clampReasoning', () => {
 		});
 		expect(requests[0].reasoning_effort).toBe('medium'); // 'high' not in the set — closest below
 	});
+	it('clamps to none when it is the only accepted effort', () => {
+		expect(clampReasoning('low', ['none'])).toBe('none');
+	});
+	it('maps off to an explicit none when the model probed to accept it', async () => {
+		vi.mocked(loadConfig).mockReturnValueOnce({
+			baseUrl: 'http://localhost:9999/v1',
+			apiKey: '',
+			models: [],
+			reasoning: { m: ['medium', 'none'] }
+		});
+		const requests: { reasoning_effort?: string }[] = [];
+		globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+			requests.push(JSON.parse(init!.body as string));
+			return sseResponse(ANSWER_SSE);
+		}) as typeof fetch;
+		await runAgent({
+			model: 'm',
+			messages: [{ role: 'user', content: 'hi' }],
+			reasoning: 'off',
+			emit: () => {}
+		});
+		expect(requests[0].reasoning_effort).toBe('none'); // thinking actually disabled, not just hidden
+	});
+	it('omits the effort for off when the model has no probed none', async () => {
+		vi.mocked(loadConfig).mockReturnValueOnce({
+			baseUrl: 'http://localhost:9999/v1',
+			apiKey: '',
+			models: [],
+			reasoning: { m: ['medium'] }
+		});
+		const requests: { reasoning_effort?: string }[] = [];
+		globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+			requests.push(JSON.parse(init!.body as string));
+			return sseResponse(ANSWER_SSE);
+		}) as typeof fetch;
+		await runAgent({
+			model: 'm',
+			messages: [{ role: 'user', content: 'hi' }],
+			reasoning: 'off',
+			emit: () => {}
+		});
+		expect(requests[0].reasoning_effort).toBeUndefined(); // strict servers reject 'none' — omit, don't 400
+	});
 });

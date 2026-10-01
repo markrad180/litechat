@@ -97,9 +97,11 @@ Windows: use Git Bash and the manual steps above.
   `reasoning_effort` per conversation; calculator is always on. The top level
   shows as **Ultra** in the UI; the wire value is `xhigh`.
 - Chat. Tokens stream in live; background thinking streams into a collapsible
-  *Thinking · \<level\>* block above the reply (when the model emits reasoning
-  and a level above Off is selected — Off shows no thinking block, even if the
-  server thinks).
+  *Thinking · \<level\>* block above the reply, which follows the text as it
+  grows. With a level above Off the block shows whatever the model emits; with
+  Off no thinking block shows — and on models whose capability probe accepts
+  the `none` effort, Off sends `reasoning_effort: "none"` so the model stops
+  thinking altogether (on servers without that value it's hidden, not disabled).
 - Ask for arithmetic ("what's 6*7?") to see the calculator tool; ask it to
   search the web to see `web_search` / `web_fetch` activity rows.
 - When the server reports token usage, a stealth stats row appears under the

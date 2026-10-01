@@ -6,7 +6,9 @@ export interface ToolCall {
 	arguments: string; // raw JSON string, as streamed by the model
 }
 
-export type ReasoningLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh';
+// 'none' is wire-only: a probed reasoning_effort value that disables thinking,
+// sent when the user picks 'off' — never a picker option.
+export type ReasoningLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'none';
 
 export interface TurnStats {
 	prompt: number; // prefill tokens (summed across tool rounds)

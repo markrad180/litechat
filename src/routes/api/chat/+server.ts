@@ -123,10 +123,13 @@ export async function POST({ request }: { request: Request }) {
 				}
 				// A template that rejects the (clamped) effort 4xxs the turn — same
 				// evidence invalidation as images: delete so the next selection re-probes.
-				if (agentOpts.reasoning && agentOpts.reasoning !== 'off' && /HTTP 4\d\d/.test(message)) {
+				if (agentOpts.reasoning && /HTTP 4\d\d/.test(message)) {
 					try {
 						const cfg = loadConfig();
-						if (cfg.reasoning && agentOpts.model in cfg.reasoning) {
+						// 'off' only rides the wire as probed-accepted 'none'; a plain 'off'
+						// 4xx says nothing about the probed effort set.
+						const carried = agentOpts.reasoning !== 'off' || (cfg.reasoning?.[agentOpts.model]?.includes('none') ?? false);
+						if (carried && cfg.reasoning && agentOpts.model in cfg.reasoning) {
 							delete cfg.reasoning[agentOpts.model];
 							saveConfig(cfg);
 						}

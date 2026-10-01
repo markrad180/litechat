@@ -60,6 +60,13 @@
 	// while Set .has/.add does not invalidate the dependent {#if} here.
 	let brokenThumbs = $state<Record<string, boolean>>({});
 
+	// While a live turn is thinking, the <pre> grows under a 240px max-height
+	// and would sit pinned to its top; follow the tail so the user sees it work.
+	let thinkPre = $state<HTMLPreElement | undefined>(undefined);
+	$effect(() => {
+		if (live && message.reasoning && thinkPre) thinkPre.scrollTop = thinkPre.scrollHeight;
+	});
+
 	const COPY_ICON =
 		'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>';
 	const CHECK_ICON =
@@ -101,7 +108,7 @@
 					Thinking{message.reasoningLevel ? ` · ${levelLabel(message.reasoningLevel)}` : ''}
 				</summary>
 				<div class="thinking-body">
-					<pre>{message.reasoning}</pre>
+					<pre bind:this={thinkPre}>{message.reasoning}</pre>
 				</div>
 			</details>
 		{/if}

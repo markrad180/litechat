@@ -763,6 +763,11 @@ a:focus-visible {
 	border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
+/* confirmed no-vision model: the pill stays visible so the limit reads at a glance */
+.vision-chip.off {
+	color: var(--dim);
+}
+
 .vision-chip .spark {
 	position: absolute;
 	left: var(--x);

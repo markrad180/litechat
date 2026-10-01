@@ -47,7 +47,7 @@ export function extractReasoning(d?: { reasoning?: unknown; reasoning_content?: 
 	return typeof r === 'string' ? r : '';
 }
 
-const REASONING_RANK: Record<ReasoningLevel, number> = { off: 0, low: 1, medium: 2, high: 3, xhigh: 4 };
+const REASONING_RANK: Record<ReasoningLevel, number> = { off: 0, none: 0, low: 1, medium: 2, high: 3, xhigh: 4 };
 
 // Clamp the requested effort to the model's probed accepted set so a template
 // that rejects e.g. 'high' never 400s mid-turn. Closest supported level below
@@ -326,6 +326,11 @@ export async function runAgent(opts: {
 	let completionTokens = 0;
 	// Clamp to the model's probed max — unprobed models (no config entry) pass through.
 	const level = clampReasoning(opts.reasoning, endpoint.reasoning?.[opts.model]);
+	// 'off' → explicit 'none' when the model probed to accept it, so thinking is
+	// actually disabled, not just hidden. Servers that reject 'none' never list
+	// it, so the effort is omitted and the display suppression (below) still holds.
+	const wireEffort =
+		level === 'off' && endpoint.reasoning?.[opts.model]?.includes('none') ? 'none' : level && level !== 'off' ? level : undefined;
 
 	// round MAX_TOOL_ROUNDS is the guaranteed final answer: tools stripped, so the model
 	// can't burn another round — the user always gets a reply, not a "stopped" note.
@@ -348,8 +353,8 @@ export async function runAgent(opts: {
 					model: opts.model,
 					messages: wire,
 					tools: final ? [] : opts.tools ? filterTools(opts.tools) : toolSchemas,
-					// Already clamped to the model's probed max; unprobed models pass through
-					...(level && level !== 'off' ? { reasoning_effort: level } : {}),
+					// Clamped to the model's probed set; unprobed models pass through
+					...(wireEffort ? { reasoning_effort: wireEffort } : {}),
 					stream_options: { include_usage: true }, // per-turn stats; servers that ignore it just omit usage
 					stream: true
 				},

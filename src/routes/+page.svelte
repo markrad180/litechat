@@ -135,6 +135,28 @@
 	});
 	let lightbox = $state<{ url: string; name: string } | null>(null);
 
+	// A confirmed no-vision model can't use staged images: demote ready image chips
+	// (attached before a model switch, or while the probe was still pending) and
+	// drop their bytes, so the server never ships them into a turn. Docs stay
+	// attached — only isImage chips are touched.
+	$effect(() => {
+		if (config?.vision?.[model] !== false) return;
+		const stale = pending.filter((p) => p.status === 'ready' && p.isImage && p.meta);
+		if (!stale.length) return;
+		pending = pending.map((p) =>
+			stale.includes(p) ? { ...p, status: 'error', error: `Model “${model}” doesn’t support images` } : p
+		);
+		for (const p of stale) {
+			if (!active) continue;
+			const convId = active.id;
+			const attId = p.meta!.id;
+			void fetch(`/api/conversations/${convId}/attachments/${attId}`, { method: 'DELETE' }).then((res) => {
+				if (!res.ok || !active) return;
+				active = { ...active, attachments: (active.attachments ?? []).filter((a) => a.id !== attId) };
+			});
+		}
+	});
+
 	// Each spark re-appears at a new random point of the chip outline after it
 	// fades — the position is re-rolled at animation-iteration end, when the
 	// spark is invisible, so the jump never shows. Random side + x along the
@@ -708,6 +730,11 @@
 									<span class="spark" aria-hidden="true" onanimationiteration={repositionSpark} style="--x: 16%; --y: 100%; --s: 1; --i: 0.75; --d: 4.7s; --dl: 1.8s"></span>
 									<span class="spark" aria-hidden="true" onanimationiteration={repositionSpark} style="--x: 48%; --y: 0%; --s: 0.7; --i: 0.55; --d: 5.9s; --dl: 3.2s"></span>
 								{/if}
+							</span>
+						{:else if config?.vision?.[model] === false}
+							<span class="vision-chip off" title="This model doesn’t support images — image attachments won’t be processed">
+								<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" /><path d="m3 3 18 18" /></svg>
+								Vision off
 							</span>
 						{/if}
 						<ReasoningPicker

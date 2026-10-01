@@ -33,13 +33,6 @@
 	// The parent persists the committed value (config) so it survives reloads.
 	// svelte-ignore state_referenced_locally
 	let minH = $state<number | null>(initialHeight);
-	let clipped = $state(false);
-	$effect(() => {
-		void text;
-		void minH;
-		if (ta) clipped = ta.scrollHeight > ta.clientHeight + 1;
-	});
-	const showGrip = $derived((minH !== null || clipped) && !disabled);
 
 	function submit() {
 		const t = text.trim();
@@ -66,7 +59,7 @@
 	}
 
 	// Grip drag: pointer capture tracks moves off the button. Drag up to expand,
-	// down to ~48px to collapse back to auto height.
+	// down to ~72px (the CSS min-height) to collapse back to auto height.
 	let dragY = 0;
 	let dragH = 0;
 
@@ -74,17 +67,17 @@
 		e.preventDefault();
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 		dragY = e.clientY;
-		dragH = ta?.clientHeight ?? 48;
+		dragH = ta?.clientHeight ?? 72;
 	}
 
 	function gripMove(e: PointerEvent) {
 		if (e.buttons !== 1) return;
 		const h = dragH + (dragY - e.clientY);
-		if (h <= 48) {
+		if (h <= 72) {
 			minH = null;
 			return;
 		}
-		minH = Math.max(96, Math.min(Math.round(window.innerHeight * 0.6), Math.round(h)));
+		minH = Math.min(Math.round(window.innerHeight * 0.6), Math.round(h));
 	}
 
 	// Commit once when the drag ends (the config round-trips to disk).
@@ -94,8 +87,11 @@
 	}
 </script>
 
-<div class="composer-card">
-	{#if showGrip}
+<!-- tap anywhere in the card (padding, bottom row) focuses the box; buttons opt out -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="composer-card" onclick={(e) => { if (!(e.target as HTMLElement).closest('button')) ta?.focus(); }}>
+	{#if !disabled}
 		<button
 			class="icon-btn grip-btn"
 			onpointerdown={gripDown}

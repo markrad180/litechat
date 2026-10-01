@@ -9,8 +9,9 @@ const TINY_PNG =
 
 // Probed individually — the template's accepted set is arbitrary, not a
 // prefix: real templates reject 'high' while accepting 'xhigh'. 400/422 =
-// that effort isn't in the set; anything else is inconclusive.
-const EFFORTS: ReasoningLevel[] = ['xhigh', 'high', 'medium', 'low'];
+// that effort isn't in the set; anything else is inconclusive. 'none' is the
+// thinking-disabling value 'off' maps to — only sent when probed-accepted.
+const EFFORTS: ReasoningLevel[] = ['xhigh', 'high', 'medium', 'low', 'none'];
 
 const PROBE_TIMEOUT_MS = 5000;
 

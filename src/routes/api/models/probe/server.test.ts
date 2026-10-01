@@ -52,9 +52,9 @@ afterAll(() => {
 describe('POST /api/models/probe', () => {
 	it('records vision=true on 200 and sends the minimal tiny-image request', async () => {
 		writeCfg();
-		const fetchMock = stubStatuses(200, 200, 200, 200, 200); // vision probe, then all four effort probes
+		const fetchMock = stubStatuses(200, 200, 200, 200, 200, 200); // vision probe, then all five effort probes
 		const res = await POST({ request: probeRequest() });
-		expect(await res.json()).toEqual({ model: 'm1', vision: true, reasoning: ['xhigh', 'high', 'medium', 'low'] });
+		expect(await res.json()).toEqual({ model: 'm1', vision: true, reasoning: ['xhigh', 'high', 'medium', 'low', 'none'] });
 		const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
 		expect(body).toMatchObject({ model: 'm1', max_tokens: 1 });
 		expect(body.messages[0].content).toEqual([
@@ -67,7 +67,7 @@ describe('POST /api/models/probe', () => {
 	it('records vision=false on 400 and 422 (and no effort support when all efforts 4xx)', async () => {
 		for (const status of [400, 422]) {
 			writeCfg();
-			stubStatuses(status, status, status, status, status);
+			stubStatuses(status, status, status, status, status, status);
 			const res = await POST({ request: probeRequest() });
 			expect(await res.json()).toEqual({ model: 'm1', vision: false, reasoning: [] });
 		}
@@ -117,20 +117,20 @@ describe('reasoning effort set', () => {
 		// The real-world case: a template that rejects 'high' while accepting
 		// 'xhigh' — a max-based probe would record 'xhigh' and pass 'high' through.
 		writeCfg({ m1: true }); // vision known — only effort probes run
-		const fetchMock = stubStatuses(200, 400, 200, 200); // xhigh, high, medium, low
+		const fetchMock = stubStatuses(200, 400, 200, 200, 400); // xhigh, high, medium, low, none (rejected)
 		const res = await POST({ request: probeRequest() });
 		expect(await res.json()).toEqual({ model: 'm1', vision: true, reasoning: ['xhigh', 'medium', 'low'] });
-		expect(fetchMock).toHaveBeenCalledTimes(4); // every effort probed, no early stop
+		expect(fetchMock).toHaveBeenCalledTimes(5); // every effort probed, no early stop
 		const efforts = fetchMock.mock.calls.map((c) =>
 			JSON.parse((c[1] as RequestInit).body as string).reasoning_effort
 		);
-		expect(efforts).toEqual(['xhigh', 'high', 'medium', 'low']);
+		expect(efforts).toEqual(['xhigh', 'high', 'medium', 'low', 'none']);
 		expect(readCfg().reasoning).toEqual({ m1: ['xhigh', 'medium', 'low'] });
 	});
 
 	it('records an empty set when every effort is rejected', async () => {
 		writeCfg({ m1: true });
-		stubStatuses(400, 400, 400, 400);
+		stubStatuses(400, 400, 400, 400, 400);
 		const res = await POST({ request: probeRequest() });
 		expect(await res.json()).toEqual({ model: 'm1', vision: true, reasoning: [] });
 		expect(readCfg().reasoning).toEqual({ m1: [] });

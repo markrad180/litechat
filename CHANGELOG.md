@@ -2,6 +2,22 @@
 
 All notable changes to LiteChat are documented here.
 
+## [0.3.1] - 2026-10-01
+
+### Added
+
+- The live thinking block auto-scrolls as the model reasons, so a long turn never looks frozen.
+- "Vision off" indicator: when a model is confirmed not to accept images, the composer dock shows a dimmed Vision chip, and images already staged get removed (with a red chip explaining why) so no turn can fail on an image the model can't read.
+- Reasoning "Off" now actually disables thinking on models that support it: the capability probe also checks the `none` effort, and Off sends `reasoning_effort: "none"` when the model accepts it. On servers without that value, Off falls back to hiding the thinking as before.
+
+### Changed
+
+- The composer's resize grip is always visible (previously it only appeared once the box clipped or was pinned), and tapping anywhere in the message box focuses the input.
+
+### Fixed
+
+- Resizing the composer from the default height no longer jumps: the first drag snapped from 72px to 96px because of stale size constants; growth and collapse are now continuous.
+
 ## [0.3.0] - 2026-09-25
 
 ### Added
