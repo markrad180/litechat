@@ -1,5 +1,5 @@
 import type { PageLoad } from './$types';
-import type { EndpointConfig } from '$lib/types.js';
+import type { AppConfig } from '$lib/types.js';
 import { setTheme } from '$lib/theme.svelte.js';
 import { setAccent } from '$lib/accent.svelte.js';
 
@@ -10,11 +10,11 @@ export const ssr = false;
 // apply with no flash and no browser-storage cache.
 export const load: PageLoad = async ({ fetch }) => {
 	// A corrupt config.json 500s with an HTML body — don't brick the page:
-	// fall through to onboarding, where the endpoint can be re-entered.
-	let cfg: EndpointConfig;
+	// fall through to the server flow, where a server can be added.
+	let cfg: AppConfig;
 	try {
 		const res = await fetch('/api/config');
-		cfg = (await res.json()) as EndpointConfig;
+		cfg = (await res.json()) as AppConfig;
 	} catch {
 		return { config: null };
 	}
@@ -22,7 +22,7 @@ export const load: PageLoad = async ({ fetch }) => {
 	// One-time migration: prefs that used to live in browser localStorage are
 	// seeded into the config once, then the legacy keys are dropped. (The server
 	// can't read localStorage, so this runs here.)
-	const migrated: Partial<EndpointConfig> = {};
+	const migrated: Partial<AppConfig> = {};
 	try {
 		const lt = localStorage.getItem('theme');
 		if (!cfg.theme && (lt === 'light' || lt === 'dark')) migrated.theme = lt;

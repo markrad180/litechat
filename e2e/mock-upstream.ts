@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 
@@ -15,6 +15,9 @@ const CONFIG_PATH = path.join(process.cwd(), 'data', 'e2e-config.json');
 // separate from the user's chats, and wiped per run so stale entries can never
 // leak into the sidebar and skew the tests' title assertions.
 const CONV_DIR = path.join(process.cwd(), 'data', 'e2e-conversations');
+// Flag file: while it exists, the mock 400s any payload carrying an image — the
+// upstream "turned vision off" case. Specs toggle it to exercise the re-probe.
+export const VISION_OFF_FLAG = path.join(process.cwd(), 'data', 'e2e-vision-off');
 
 // Streaming /v1/chat/completions request bodies, in order — assertions on what
 // the wire actually carried (e.g. which image rides which turn). The mock runs
@@ -22,20 +25,28 @@ const CONV_DIR = path.join(process.cwd(), 'data', 'e2e-conversations');
 const capturedBodies: { messages?: unknown[] }[] = [];
 
 export async function startMock(): Promise<void> {
+	// A run interrupted mid vision-off test leaves the flag behind; a stale flag
+	// 400s every image turn in the next run, so clear it on setup, not just teardown.
+	rmSync(VISION_OFF_FLAG, { force: true });
 	rmSync(CONV_DIR, { recursive: true, force: true });
 	mkdirSync(CONV_DIR, { recursive: true });
 	writeFileSync(
 		CONFIG_PATH,
 		JSON.stringify(
 			{
-				name: 'e2e',
-				baseUrl: `http://${HOST}:${PORT}/v1`,
-				apiKey: 'test',
-				models: ['mock-1'],
-				defaultModel: 'mock-1',
-				vision: { 'mock-1': true },
-				contextReserve: 0.11,
-				theme: 'light'
+				servers: [
+					{
+						id: 'e2e',
+						name: 'e2e',
+						baseUrl: `http://${HOST}:${PORT}/v1`,
+						apiKey: 'test',
+						models: ['mock-1'],
+						vision: { 'mock-1': true }
+					}
+				],
+				activeServerId: 'e2e',
+				theme: 'light',
+				contextReserve: 0.11
 			},
 			null,
 			'\t'
@@ -68,6 +79,13 @@ export async function startMock(): Promise<void> {
 					/* body may be empty */
 				}
 				if (parsed.stream === true) capturedBodies.push(parsed);
+
+				const hasImage = JSON.stringify(parsed.messages ?? []).includes('image_url');
+				if (hasImage && existsSync(VISION_OFF_FLAG)) {
+					res.writeHead(400, { 'content-type': 'application/json' });
+					res.end(JSON.stringify({ error: 'model does not accept images' }));
+					return;
+				}
 
 				if (!parsed.stream) {
 					// Title endpoint: non-streaming single completion. Derive the
@@ -128,6 +146,7 @@ export async function stopMock(): Promise<void> {
 	}
 	rmSync(CONV_DIR, { recursive: true, force: true });
 	rmSync(CONFIG_PATH, { force: true });
+	rmSync(VISION_OFF_FLAG, { force: true });
 }
 
 // Playwright globalSetup contract: the default export is the setup; returning a

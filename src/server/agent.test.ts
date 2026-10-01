@@ -13,8 +13,18 @@ import {
 import type { Message, ToolCall } from '$lib/types.js';
 import { loadConfig } from '$lib/config.js';
 
+// loadConfig returns the app config; the active server is what runAgent talks to.
+function cfg(srv: Record<string, unknown> = {}) {
+	return {
+		servers: [{ id: 's1', name: 'test', baseUrl: 'http://localhost:9999/v1', apiKey: '', models: [], ...srv }],
+		activeServerId: 's1'
+	};
+}
 vi.mock('$lib/config', () => ({
-	loadConfig: vi.fn(() => ({ baseUrl: 'http://localhost:9999/v1', apiKey: '', models: [] }))
+	loadConfig: vi.fn(() => cfg()),
+	// the real helper is a pure find; the mock re-implements it over the mock cfg
+	activeServer: (c: { servers: { id: string }[]; activeServerId: string | null }) =>
+		c.servers.find((s) => s.id === c.activeServerId) ?? null
 }));
 // agent.ts imports workingContext from $lib/models (this mock previously pointed at
 // $lib/config, so the tests silently ran against the real 160K default)
@@ -311,12 +321,7 @@ describe('runAgent attachments', () => {
 	});
 
 	it('skips image blocks entirely for a confirmed non-vision model', async () => {
-		vi.mocked(loadConfig).mockReturnValue({
-			baseUrl: 'http://localhost:9999/v1',
-			apiKey: '',
-			models: [],
-			vision: { m: false }
-		});
+		vi.mocked(loadConfig).mockReturnValue(cfg({ vision: { m: false } }));
 		const { requests, emit } = capture();
 		await runAgent({
 			model: 'm',
@@ -433,12 +438,7 @@ describe('clampReasoning', () => {
 		expect(clampReasoning('high', [])).toBe('off');
 	});
 	it('clamps the wire effort to the accepted set', async () => {
-		vi.mocked(loadConfig).mockReturnValueOnce({
-			baseUrl: 'http://localhost:9999/v1',
-			apiKey: '',
-			models: [],
-			reasoning: { m: ['xhigh', 'medium', 'low'] }
-		});
+		vi.mocked(loadConfig).mockReturnValueOnce(cfg({ reasoning: { m: ['xhigh', 'medium', 'low'] } }));
 		const requests: { reasoning_effort?: string }[] = [];
 		globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
 			requests.push(JSON.parse(init!.body as string));
@@ -456,12 +456,7 @@ describe('clampReasoning', () => {
 		expect(clampReasoning('low', ['none'])).toBe('none');
 	});
 	it('maps off to an explicit none when the model probed to accept it', async () => {
-		vi.mocked(loadConfig).mockReturnValueOnce({
-			baseUrl: 'http://localhost:9999/v1',
-			apiKey: '',
-			models: [],
-			reasoning: { m: ['medium', 'none'] }
-		});
+		vi.mocked(loadConfig).mockReturnValueOnce(cfg({ reasoning: { m: ['medium', 'none'] } }));
 		const requests: { reasoning_effort?: string }[] = [];
 		globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
 			requests.push(JSON.parse(init!.body as string));
@@ -476,12 +471,7 @@ describe('clampReasoning', () => {
 		expect(requests[0].reasoning_effort).toBe('none'); // thinking actually disabled, not just hidden
 	});
 	it('omits the effort for off when the model has no probed none', async () => {
-		vi.mocked(loadConfig).mockReturnValueOnce({
-			baseUrl: 'http://localhost:9999/v1',
-			apiKey: '',
-			models: [],
-			reasoning: { m: ['medium'] }
-		});
+		vi.mocked(loadConfig).mockReturnValueOnce(cfg({ reasoning: { m: ['medium'] } }));
 		const requests: { reasoning_effort?: string }[] = [];
 		globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
 			requests.push(JSON.parse(init!.body as string));

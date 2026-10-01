@@ -20,17 +20,25 @@ function fixtureConversation(messages: unknown[]) {
 			title: 'New chat',
 			createdAt: 1,
 			updatedAt: 1,
-			model: 'm1',
 			messages
 		})
 	);
 }
 
-beforeAll(() => {
+function writeCfg(active = true) {
 	writeFileSync(
 		configPath,
-		JSON.stringify({ name: '', baseUrl: 'http://test/v1', apiKey: '', models: [], defaultModel: 'm1' })
+		JSON.stringify({
+			// no conversation model in the fixture — the title falls back to the active
+			// server's models[0], the new defaultModel replacement
+			servers: [{ id: 's1', name: 'test', baseUrl: 'http://test/v1', apiKey: '', models: ['m1'] }],
+			activeServerId: active ? 's1' : null
+		})
 	);
+}
+
+beforeAll(() => {
+	writeCfg();
 	fixtureConversation([
 		{ role: 'user', content: 'How do I bake sourdough?' },
 		{ role: 'assistant', content: 'Start with an active starter…' }
@@ -70,6 +78,12 @@ describe('POST /api/conversations/:id/title', () => {
 
 	it('400s when there is no user message to title', async () => {
 		fixtureConversation([]);
+		const res = await POST({ params: { id: 'title-test' } });
+		expect(res.status).toBe(400);
+	});
+
+	it('400s when there is no active server', async () => {
+		writeCfg(false);
 		const res = await POST({ params: { id: 'title-test' } });
 		expect(res.status).toBe(400);
 	});

@@ -1,7 +1,7 @@
-import { loadConfig } from '$lib/config';
+import { activeServer, loadConfig } from '$lib/config';
 import { workingContext } from '$lib/models.js';
 import { executeTool, toolSchemas } from '$lib/tools';
-import type { ContentBlock, EndpointConfig, Message, ReasoningLevel, ToolCall } from '$lib/types';
+import type { ContentBlock, Message, ReasoningLevel, ServerConfig, ToolCall } from '$lib/types';
 
 // What the chat route hands runAgent for each conversation attachment.
 export interface AttachmentInput {
@@ -152,7 +152,7 @@ export function trimHistory(
 }
 
 async function streamUpstream(
-	endpoint: EndpointConfig,
+	endpoint: ServerConfig,
 	body: unknown,
 	emit: Emit,
 	reasoningLevel?: ReasoningLevel,
@@ -258,12 +258,13 @@ export async function runAgent(opts: {
 	signal?: AbortSignal; // user stop: resolve with the partial turn instead of throwing
 	emit: Emit;
 }): Promise<Message[]> {
-	const endpoint = loadConfig();
-	if (!endpoint.baseUrl) throw new Error('Model server not configured — set the base URL in Settings');
+	const cfg = loadConfig();
+	const endpoint = activeServer(cfg);
+	if (!endpoint) throw new Error('No active server — add one in the Servers panel');
 	const messages: Message[] = [...opts.messages];
 	const appended: Message[] = [];
 	// No detected/configured ceiling → Infinity: don't trim against an assumed window.
-	const working = workingContext(endpoint, opts.model) ?? Infinity;
+	const working = workingContext(endpoint, opts.model, cfg.contextReserve) ?? Infinity;
 
 	// Context stuffing: docs get 40% of the working window, history keeps ≥60% before
 	// trimming. The stuffed system message is wire-only (like the tool nudge below) —

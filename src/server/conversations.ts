@@ -14,7 +14,15 @@ function fileFor(id: string): string {
 
 async function write(conv: Conversation): Promise<void> {
 	await fs.mkdir(DATA_DIR, { recursive: true });
-	await fs.writeFile(fileFor(conv.id), JSON.stringify(conv, null, '\t'));
+	// Atomic publish: a lister reading mid-writeFile sees truncated JSON and
+	// skips the conversation (the list drops a row until the next refresh).
+	// rename on the same filesystem is atomic, so readers see old-or-new only.
+	// ponytail: a crashed write leaves a .tmp-* file behind; harmless (the list
+	// only reads *.json), swept on next write of the same id if it ever matters.
+	const dest = fileFor(conv.id);
+	const tmp = `${dest}.tmp-${randomUUID()}`;
+	await fs.writeFile(tmp, JSON.stringify(conv, null, '\t'));
+	await fs.rename(tmp, dest);
 }
 
 export async function listConversations(): Promise<ConversationMeta[]> {
@@ -56,7 +64,6 @@ export async function getConversation(id: string): Promise<Conversation> {
 export async function createConversation(p: {
 	title?: string;
 	model?: string;
-	endpointId?: string;
 	webTools?: boolean;
 	reasoning?: ReasoningLevel;
 }): Promise<Conversation> {
@@ -66,7 +73,6 @@ export async function createConversation(p: {
 		title: p.title?.trim() || 'New chat',
 		createdAt: now,
 		updatedAt: now,
-		endpointId: p.endpointId,
 		model: p.model,
 		messages: [],
 		webTools: p.webTools ?? true,
@@ -79,7 +85,7 @@ export async function createConversation(p: {
 export async function updateConversation(
 	id: string,
 	patch: Partial<
-		Pick<Conversation, 'title' | 'model' | 'endpointId' | 'messages' | 'attachments' | 'webTools' | 'reasoning'>
+		Pick<Conversation, 'title' | 'model' | 'messages' | 'attachments' | 'webTools' | 'reasoning'>
 	>
 ): Promise<Conversation> {
 	const conv = await getConversation(id);

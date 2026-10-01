@@ -1,24 +1,24 @@
 import { json } from '@sveltejs/kit';
-import { loadConfig } from '$lib/config.js';
+import { activeServer, loadConfig } from '$lib/config.js';
 import { getConversation, updateConversation } from '../../../../../server/conversations.js';
 
 // Background chat naming: one quick non-reasoning completion to the same model.
 // Non-streaming — a title is a single short string, no point in SSE plumbing.
 export async function POST({ params }: { params: { id: string } }) {
 	const conv = await getConversation(params.id);
-	const cfg = loadConfig();
-	const model = conv.model ?? cfg.defaultModel;
+	const srv = activeServer(loadConfig());
+	const model = conv.model ?? srv?.models?.[0];
 	const firstUser = conv.messages.find((m) => m.role === 'user')?.content ?? '';
-	if (!model) return json({ error: 'No model configured' }, { status: 400 });
+	if (!model || !srv) return json({ error: 'No active server' }, { status: 400 });
 	if (!firstUser) return json({ error: 'Nothing to title yet' }, { status: 400 });
 
 	const firstAssistant = conv.messages.find((m) => m.role === 'assistant' && m.content)?.content ?? '';
-	const url = `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+	const url = `${srv.baseUrl.replace(/\/+$/, '')}/chat/completions`;
 	const res = await fetch(url, {
 		method: 'POST',
 		headers: {
 			'content-type': 'application/json',
-			...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {})
+			...(srv.apiKey ? { authorization: `Bearer ${srv.apiKey}` } : {})
 		},
 		body: JSON.stringify({
 			model,

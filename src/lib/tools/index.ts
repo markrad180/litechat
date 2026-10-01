@@ -7,7 +7,8 @@ export const toolSchemas = [
 		type: 'function',
 		function: {
 			name: 'web_search',
-			description: 'Search the web. Returns the top results with titles, URLs, and snippets.',
+			description:
+				'Search the web for current information — weather, news, prices, recent events, or anything you do not know. Returns the top results with titles, URLs, and snippets.',
 			parameters: {
 				type: 'object',
 				properties: {

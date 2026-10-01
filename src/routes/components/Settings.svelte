@@ -1,20 +1,19 @@
 <script lang="ts">
 	import { api } from '$lib/api.js';
 	import { getAccent, setAccent } from '$lib/accent.svelte.js';
-	import { workingContext } from '$lib/models.js';
-	import type { EndpointConfig } from '$lib/types.js';
+	import type { AppConfig } from '$lib/types.js';
 
 	let {
 		config,
+		onmanage,
 		onsaved,
 		onclose
 	}: {
-		config: EndpointConfig;
-		onsaved: (cfg: EndpointConfig) => void;
+		config: AppConfig | null;
+		onmanage: () => void; // opens the full-screen server flow
+		onsaved: (cfg: AppConfig) => void;
 		onclose: () => void;
 	} = $props();
-
-	let tab = $state<'server' | 'visual'>('server');
 
 	$effect(() => {
 		const onKey = (e: KeyboardEvent) => {
@@ -24,80 +23,67 @@
 		return () => document.removeEventListener('keydown', onKey);
 	});
 
-	// Seeds local state once from the config snapshot it opens with.
+	let tab = $state<'servers' | 'visual'>('servers');
+
+	// Universal context reserve (%), not per-server. Committed on blur/Enter, not
+	// per keystroke.
 	// svelte-ignore state_referenced_locally
-	const cfg = config;
-	let baseUrl = $state(cfg.baseUrl);
-	let apiKey = $state(cfg.apiKey);
-	let models = $state<string[]>(cfg.models ?? []);
-	let modelContext = $state<Record<string, number>>(cfg.modelContext ?? {});
-	let defaultModel = $state(cfg.defaultModel ?? '');
-	let reservePct = $state(Math.round((cfg.contextReserve ?? 0.11) * 100));
-	let fetchError = $state('');
-	let saved = $state(false);
-	let busy = $state(false);
+	let reservePct = $state(Math.round((config?.contextReserve ?? 0.11) * 100)); // re-seeded by the effect below
+	$effect(() => {
+		void config?.contextReserve;
+		reservePct = Math.round((config?.contextReserve ?? 0.11) * 100);
+	});
 
-	// Context window: ceiling detected from /models for the selected model, reserve
-	// is user-tunable, working limit derived — same formula the server trims against.
-	// Unknown ceiling → no number shown, no trimming assumed.
-	const contextCeiling = $derived(modelContext[defaultModel] ?? cfg.contextWindow ?? null);
-	const contextWorking = $derived(
-		workingContext({ ...cfg, modelContext, contextReserve: reservePct / 100 }, defaultModel)
-	);
-
-	async function fetchModels() {
-		busy = true;
-		fetchError = '';
-		try {
-			const res = await api<{ models: string[]; modelContext: Record<string, number> }>('/api/models');
-			models = res.models;
-			modelContext = res.modelContext ?? {};
-		} catch (e) {
-			fetchError = e instanceof Error ? e.message : String(e);
-		} finally {
-			busy = false;
-		}
+	function commitReserve() {
+		const pct = Math.round(Math.max(0, Math.min(90, Number.isNaN(reservePct) ? 11 : reservePct)));
+		reservePct = pct;
+		// The PUT response is the fresh config — hand it up so the app never runs a stale copy.
+		void api<AppConfig>('/api/config', { method: 'PUT', body: JSON.stringify({ contextReserve: pct / 100 }) })
+			.then((cfg) => onsaved(cfg))
+			.catch(() => {});
 	}
 
-	async function save() {
-		// A saved config must be a valid one — the app gate requires both.
-		if (!baseUrl.trim() || !defaultModel.trim() || busy) return;
-		busy = true;
-		try {
-			// PUT strips apiKey from its response; keep the local value for the parent.
-			const cfg = await api<EndpointConfig>('/api/config', {
-				method: 'PUT',
-				body: JSON.stringify({
-					// no `name`: the server-name field was dropped; the key stays inert server-side
-					baseUrl: baseUrl.trim(),
-					apiKey,
-					defaultModel: defaultModel.trim(),
-					contextReserve: reservePct / 100
-				})
-			});
-			onsaved({ ...cfg, apiKey });
-			saved = true;
-			setTimeout(() => (saved = false), 1200);
-		} catch (e) {
-			fetchError = e instanceof Error ? e.message : String(e);
-		} finally {
-			busy = false;
-		}
-	}
-
-	// Visual: 3×5 rainbow-ish grid; includes the default terracotta so a selection is always visible.
+	// Visual: 3×5 rainbow-ish grid; includes the default azure so a selection is always visible.
 	const ACCENTS = [
-		'#ff5252', '#ff7a1a', '#ffc93c', '#a3e635', '#22c55e',
-		'#2dd4bf', '#38bdf8', '#3b82f6', '#6366f1', '#a855f7',
-		'#ec4899', '#ff2d95', '#00ffa3', '#00e5ff', '#d97757'
+		{ hex: '#dc143c', name: 'Crimson' },
+		{ hex: '#ff5252', name: 'Scarlet' },
+		{ hex: '#f43f5e', name: 'Rose' },
+		{ hex: '#ff6f61', name: 'Coral' },
+		{ hex: '#ff8c7a', name: 'Salmon' },
+		{ hex: '#d97757', name: 'Terracotta' },
+		{ hex: '#ff7a1a', name: 'Orange' },
+		{ hex: '#ff9f43', name: 'Tangerine' },
+		{ hex: '#ffc0a1', name: 'Peach' },
+		{ hex: '#ffc93c', name: 'Amber' },
+		{ hex: '#f5c518', name: 'Gold' },
+		{ hex: '#e8f542', name: 'Lemon' },
+		{ hex: '#a3e635', name: 'Lime' },
+		{ hex: '#7fff00', name: 'Chartreuse' },
+		{ hex: '#22c55e', name: 'Green' },
+		{ hex: '#10b981', name: 'Emerald' },
+		{ hex: '#00ffa3', name: 'Mint' },
+		{ hex: '#2dd4bf', name: 'Teal' },
+		{ hex: '#40e0d0', name: 'Turquoise' },
+		{ hex: '#00e5ff', name: 'Cyan' },
+		{ hex: '#38bdf8', name: 'Sky' },
+		{ hex: '#007fff', name: 'Azure' },
+		{ hex: '#3b82f6', name: 'Blue' },
+		{ hex: '#2c3e70', name: 'Navy' },
+		{ hex: '#6366f1', name: 'Indigo' },
+		{ hex: '#7c3aed', name: 'Violet' },
+		{ hex: '#a855f7', name: 'Purple' },
+		{ hex: '#c58af9', name: 'Lavender' },
+		{ hex: '#ec4899', name: 'Pink' },
+		{ hex: '#ff2d95', name: 'Magenta' }
 	];
 	let selected = $state(getAccent());
 
 	async function pick(hex: string) {
 		setAccent(hex);
 		selected = hex;
-		// persist server-side (awaited, so disk can't silently lose the pick); partial merge keeps the rest
-		await api('/api/config', { method: 'PUT', body: JSON.stringify({ accent: hex }) }).catch(() => {});
+		// The PUT response is the fresh config — hand it up so the app never runs a stale copy.
+		const cfg = await api<AppConfig>('/api/config', { method: 'PUT', body: JSON.stringify({ accent: hex }) }).catch(() => null);
+		if (cfg) onsaved(cfg);
 	}
 </script>
 
@@ -108,88 +94,54 @@
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<div class="modal" role="dialog" aria-label="Settings" onclick={(e) => e.stopPropagation()}>
 		<div class="modal-tabs">
-			<button class="tab-btn" class:active={tab === 'server'} onclick={() => (tab = 'server')}>Server</button>
-			<button class="tab-btn" class:active={tab === 'visual'} onclick={() => (tab = 'visual')}>Visual</button>
+			<span class="modal-title">Settings</span>
 			<button class="icon-btn" aria-label="Close settings" onclick={onclose}>
 				<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
 			</button>
 		</div>
-
-		{#if tab === 'server'}
+		<div class="settings-tabs">
+			<button class="tab-btn" class:active={tab === 'servers'} onclick={() => (tab = 'servers')}>Servers</button>
+			<button class="tab-btn" class:active={tab === 'visual'} onclick={() => (tab = 'visual')}>Visual</button>
+		</div>
+		{#if tab === 'servers'}
 			<div class="modal-panel">
+				<button class="btn-primary" onclick={onmanage}>Manage servers</button>
 				<label class="field">
-					Base URL
-					<input bind:value={baseUrl} placeholder="http://localhost:8080/v1" spellcheck="false" />
+					Context reserve
+					<span class="reserve-row">
+						<input
+							type="number"
+							min="0"
+							max="90"
+							bind:value={reservePct}
+							onblur={commitReserve}
+							onkeydown={(e) => e.key === 'Enter' && commitReserve()}
+						/>
+						<span class="unit">%</span>
+					</span>
 				</label>
-				<label class="field">
-					API key
-					<input type="password" bind:value={apiKey} placeholder="Optional • unless your provider/server requires one" />
-				</label>
-
-				<div class="models-section">
-					<div class="models-head">
-						<span>Models</span>
-						<button class="btn-ghost small" disabled={busy} onclick={fetchModels}>
-							{busy ? 'Fetching…' : 'Fetch models'}
-						</button>
-					</div>
-					{#if models.length}
-						<div class="models-list">
-							{#each models as m (m)}
-								<button class="model-row" class:current={m === defaultModel} onclick={() => (defaultModel = m)}>{m}</button>
-							{/each}
-						</div>
-					{:else}
-						<p class="sub">No cached models — fetch them.</p>
-					{/if}
-					{#if fetchError}
-						<p class="onboard-error">{fetchError}</p>
-					{/if}
-				</div>
-
-				<div class="models-section">
-					<span class="models-head">Context window</span>
-					{#if contextCeiling}
-						<p class="sub">
-							{contextCeiling.toLocaleString('en-US')} tokens — working limit
-							{contextWorking?.toLocaleString('en-US') ?? '—'}
-						</p>
-					{:else}
-						<p class="sub">
-							No context size reported — the server limits the window; trimming stays
-							off until it reports one.
-						</p>
-					{/if}
-					<label class="field">
-						Reserve for output <span class="hint">(%, trimmed automatically above this)</span>
-						<input type="number" min="0" max="90" bind:value={reservePct} />
-					</label>
-				</div>
-
-				<div class="onboard-actions">
-					<button class="btn-ghost" onclick={onclose}>Cancel</button>
-					<button class="btn-primary" disabled={!baseUrl.trim() || !defaultModel.trim() || busy} onclick={save}>
-						{saved ? '✓ Saved' : 'Save'}
-					</button>
-				</div>
+				<p class="settings-hint">Kept free of every server’s context window for output. Applies to all servers. (Default 11%)</p>
 			</div>
 		{:else}
 			<div class="modal-panel">
-				<label class="field">
+				<!-- div, not label: a label wrapping the grid forwards hover/click
+				 to its first control (the first dot) in Safari — the whole grid
+				 area would hover the first dot. -->
+				<div class="field">
 					Accent color
 					<div class="accent-grid">
-						{#each ACCENTS as hex (hex)}
+						{#each ACCENTS as { hex, name } (hex)}
 							<button
 								class="accent-dot"
 								class:selected={hex === selected}
 								style="background:{hex}"
-								aria-label="Accent {hex}"
-								title={hex}
+								aria-label="Accent {name}"
+								data-tip="{name} ({hex})"
 								onclick={() => pick(hex)}
 							></button>
 						{/each}
 					</div>
-				</label>
+				</div>
 			</div>
 		{/if}
 	</div>

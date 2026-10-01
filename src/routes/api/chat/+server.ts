@@ -1,7 +1,7 @@
 import { runAgent, type AttachmentInput } from '../../../server/agent.js';
 import { getConversation, updateConversation } from '../../../server/conversations.js';
 import { readAttachmentBytes, readAttachmentText } from '../../../server/attachments.js';
-import { loadConfig, saveConfig } from '$lib/config.js';
+import { activeServer, loadConfig, saveConfig } from '$lib/config.js';
 import type { Message, ReasoningLevel } from '$lib/types';
 
 interface ChatRequest {
@@ -113,8 +113,9 @@ export async function POST({ request }: { request: Request }) {
 					// oversized image) so the next model selection re-probes.
 					try {
 						const cfg = loadConfig();
-						if (cfg.vision && agentOpts.model in cfg.vision) {
-							delete cfg.vision[agentOpts.model];
+						const srv = activeServer(cfg);
+						if (srv && srv.vision && agentOpts.model in srv.vision) {
+							delete srv.vision[agentOpts.model];
 							saveConfig(cfg);
 						}
 					} catch {
@@ -126,11 +127,13 @@ export async function POST({ request }: { request: Request }) {
 				if (agentOpts.reasoning && /HTTP 4\d\d/.test(message)) {
 					try {
 						const cfg = loadConfig();
+						const srv = activeServer(cfg);
 						// 'off' only rides the wire as probed-accepted 'none'; a plain 'off'
 						// 4xx says nothing about the probed effort set.
-						const carried = agentOpts.reasoning !== 'off' || (cfg.reasoning?.[agentOpts.model]?.includes('none') ?? false);
-						if (carried && cfg.reasoning && agentOpts.model in cfg.reasoning) {
-							delete cfg.reasoning[agentOpts.model];
+						const carried =
+							agentOpts.reasoning !== 'off' || (srv?.reasoning?.[agentOpts.model]?.includes('none') ?? false);
+						if (srv && carried && srv.reasoning && agentOpts.model in srv.reasoning) {
+							delete srv.reasoning[agentOpts.model];
 							saveConfig(cfg);
 						}
 					} catch {

@@ -64,7 +64,6 @@ export interface Conversation {
 	title: string;
 	createdAt: number;
 	updatedAt: number;
-	endpointId?: string;
 	model?: string;
 	messages: Message[];
 	attachments?: AttachmentMeta[]; // per-conversation; stuffed into context every turn
@@ -79,19 +78,27 @@ export interface ConversationMeta {
 	model?: string;
 }
 
-export interface EndpointConfig {
-	name?: string;
-	baseUrl: string; // '' = unconfigured (drives onboarding)
-	apiKey: string;
+// One LLM server. Capability records are per-server: the same model id on two
+// servers is probed and stored independently.
+export interface ServerConfig {
+	id: string; // uuid, generated once at add time; stable thereafter
+	name: string; // tile label; falls back to the host of baseUrl
+	baseUrl: string;
+	apiKey: string; // '' = none
 	models: string[]; // last successful /models fetch; offline picker cache
-	defaultModel?: string;
-	accent?: string; // '' = unset (fall back to the CSS default)
 	contextWindow?: number; // whole-model ceiling (e.g. max_model_len); used when modelContext lacks the active model
-	contextReserve?: number; // fraction reserved for output, 0..1 (default 0.11)
 	modelContext?: Record<string, number>; // per-model ceilings detected from /models
 	vision?: Record<string, boolean>; // per-model vision capability from the tiny-image probe; missing = unprobed
 	reasoning?: Record<string, ReasoningLevel[]>; // per-model accepted efforts from the probe; [] = none; missing = unprobed
+	lastModel?: string; // last model chosen in the picker for this server; restored on load
+}
+
+export interface AppConfig {
+	servers: ServerConfig[];
+	activeServerId: string | null; // null = unconfigured (drives the server flow)
+	accent?: string; // '' = unset (fall back to the CSS default)
 	theme?: 'light' | 'dark'; // missing = light
 	sidebarWidth?: number; // px, 180..480; missing = default 260
 	composerHeight?: number; // px; 0/missing = auto-grow
+	contextReserve?: number; // fraction of the context window reserved for output, 0..1 (default 0.11); universal, not per-server
 }

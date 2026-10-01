@@ -9,17 +9,22 @@ vi.hoisted(() => {
 });
 const testConfig = process.env.LITECHAT_CONFIG!;
 
-function writeCfg(vision?: Record<string, boolean>, reasoning?: Record<string, string[]>) {
+function writeCfg(vision?: Record<string, boolean>, reasoning?: Record<string, string[]>, active = true) {
 	writeFileSync(
 		testConfig,
 		JSON.stringify({
-			name: '',
-			baseUrl: 'http://test/v1',
-			apiKey: '',
-			models: [],
-			defaultModel: 'm1',
-			...(vision ? { vision } : {}),
-			...(reasoning ? { reasoning } : {})
+			servers: [
+				{
+					id: 's1',
+					name: 'test',
+					baseUrl: 'http://test/v1',
+					apiKey: '',
+					models: [],
+					...(vision ? { vision } : {}),
+					...(reasoning ? { reasoning } : {})
+				}
+			],
+			activeServerId: active ? 's1' : null
 		})
 	);
 }
@@ -61,7 +66,7 @@ describe('POST /api/models/probe', () => {
 			{ type: 'text', text: '.' },
 			{ type: 'image_url', image_url: { url: expect.stringMatching(/^data:image\/png;base64,/) } }
 		]);
-		expect(JSON.parse(readFileSync(testConfig, 'utf8')).vision).toEqual({ m1: true });
+		expect(JSON.parse(readFileSync(testConfig, 'utf8')).servers[0].vision).toEqual({ m1: true });
 	});
 
 	it('records vision=false on 400 and 422 (and no effort support when all efforts 4xx)', async () => {
@@ -71,8 +76,8 @@ describe('POST /api/models/probe', () => {
 			const res = await POST({ request: probeRequest() });
 			expect(await res.json()).toEqual({ model: 'm1', vision: false, reasoning: [] });
 		}
-		expect(readCfg().vision).toEqual({ m1: false });
-		expect(readCfg().reasoning).toEqual({ m1: [] });
+		expect(readCfg().servers[0].vision).toEqual({ m1: false });
+		expect(readCfg().servers[0].reasoning).toEqual({ m1: [] });
 	});
 
 	it('writes nothing on other 4xx, 5xx, or network failure', async () => {
@@ -88,8 +93,8 @@ describe('POST /api/models/probe', () => {
 			const res = await POST({ request: probeRequest() });
 			expect(await res.json()).toEqual({ model: 'm1', vision: null, reasoning: null });
 		}
-		expect(readCfg().vision).toBeUndefined();
-		expect(readCfg().reasoning).toBeUndefined();
+		expect(readCfg().servers[0].vision).toBeUndefined();
+		expect(readCfg().servers[0].reasoning).toBeUndefined();
 	});
 
 	it('never overwrites existing entries (and doesn’t fetch)', async () => {
@@ -98,6 +103,15 @@ describe('POST /api/models/probe', () => {
 		vi.stubGlobal('fetch', fetchMock);
 		const res = await POST({ request: probeRequest() });
 		expect(await res.json()).toEqual({ model: 'm1', vision: true, reasoning: ['high', 'medium'] });
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('returns inconclusive nulls with no active server (and doesn’t fetch)', async () => {
+		writeCfg(undefined, undefined, false);
+		const fetchMock = vi.fn();
+		vi.stubGlobal('fetch', fetchMock);
+		const res = await POST({ request: probeRequest() });
+		expect(await res.json()).toEqual({ model: 'm1', vision: null, reasoning: null });
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
@@ -125,7 +139,7 @@ describe('reasoning effort set', () => {
 			JSON.parse((c[1] as RequestInit).body as string).reasoning_effort
 		);
 		expect(efforts).toEqual(['xhigh', 'high', 'medium', 'low', 'none']);
-		expect(readCfg().reasoning).toEqual({ m1: ['xhigh', 'medium', 'low'] });
+		expect(readCfg().servers[0].reasoning).toEqual({ m1: ['xhigh', 'medium', 'low'] });
 	});
 
 	it('records an empty set when every effort is rejected', async () => {
@@ -133,7 +147,7 @@ describe('reasoning effort set', () => {
 		stubStatuses(400, 400, 400, 400, 400);
 		const res = await POST({ request: probeRequest() });
 		expect(await res.json()).toEqual({ model: 'm1', vision: true, reasoning: [] });
-		expect(readCfg().reasoning).toEqual({ m1: [] });
+		expect(readCfg().servers[0].reasoning).toEqual({ m1: [] });
 	});
 
 	it('bails with null on a mid-probe 5xx (re-probed next time)', async () => {
@@ -141,7 +155,7 @@ describe('reasoning effort set', () => {
 		stubStatuses(400, 500, 200, 200);
 		const res = await POST({ request: probeRequest() });
 		expect(await res.json()).toEqual({ model: 'm1', vision: true, reasoning: null });
-		expect(readCfg().reasoning).toBeUndefined();
+		expect(readCfg().servers[0].reasoning).toBeUndefined();
 	});
 
 	it('skips the image probe when vision is already known', async () => {

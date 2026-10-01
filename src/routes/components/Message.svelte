@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { parseSearchContent } from '$lib/tools/web-search.js';
 	import { renderMarkdown } from '$lib/md.js';
 	import { fmtCount, fmtRate, fmtWall } from '$lib/stats.js';
 	import type { AttachmentMeta, Message as ChatMessage, ReasoningLevel } from '$lib/types.js';
@@ -131,7 +132,20 @@
 							<div class="tool-call" class:empty={!result || result.startsWith('Error:')}>
 								<div class="tool-call-name">{labelFor(tc.name)}</div>
 								{#if result && !result.startsWith('Error:')}
-									<pre>{result}</pre>
+									<!-- display-only: compact rows for search results, raw text otherwise -->
+									{@const rows = tc.name === 'web_search' ? parseSearchContent(result) : null}
+									{#if rows}
+										<div class="tool-search">
+											{#each rows as r}
+												<div class="tool-search-result">
+													<a href={r.url} target="_blank" rel="noreferrer">{r.title}</a>
+													{#if r.snippet}<p>{r.snippet}</p>{/if}
+												</div>
+											{/each}
+										</div>
+									{:else}
+										<pre>{result}</pre>
+									{/if}
 								{/if}
 							</div>
 						{/each}

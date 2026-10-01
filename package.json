@@ -1,7 +1,7 @@
 {
 	"name": "litechat",
 	"private": true,
-	"version": "0.3.1",
+	"version": "0.4.0",
 	"license": "MIT",
 	"type": "module",
 	"engines": {
@@ -39,7 +39,7 @@
 		"marked": "^18.0.13",
 		"officeparser": "^8.0.0",
 		"unpdf": "^1.8.1",
-		"xlsx": "https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz"
+		"xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
 	},
 	"overrides": {
 		"cookie": "^0.7.0"

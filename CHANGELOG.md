@@ -2,6 +2,19 @@
 
 All notable changes to LiteChat are documented here.
 
+## [0.4.0] - 2026-10-01
+
+### Added
+
+- Server management: a Servers panel to add, switch between, refresh, and delete multiple model servers. Each tile shows its model count and how many accept images; the active server is highlighted.
+- Add-server validates before saving: "Test" runs a live check (fetch `/models` + a per-model vision probe) and shows the result inline without persisting; "Add" only saves once the server answers. Backed by a new `/api/servers/validate` endpoint.
+- A first-run "Connect a model server" gate when no server is configured (replaces the old onboarding screen).
+
+### Changed
+
+- Rebranded to the Azure fox: app icon, updater icon, and favicon now use the blue fox mark.
+- Vision probing moved into a shared `probe` module reused by the model picker and the server flow.
+
 ## [0.3.1] - 2026-10-01
 
 ### Added

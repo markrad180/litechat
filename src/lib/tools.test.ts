@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { calculator } from './tools/calculator.js';
-import { parseBing, webSearch } from './tools/web-search.js';
+import { parseDdg, parseSearchContent, webSearch } from './tools/web-search.js';
 import { htmlToText, webFetch } from './tools/web-fetch.js';
 
 describe('calculator', () => {
@@ -16,12 +16,12 @@ describe('calculator', () => {
 	});
 });
 
-// u= param is base64url of "https://example.com/page".
-const BING_HTML = `<li class="b_algo" data-id="x"><h2 class=""><a target="_blank" href="https://www.bing.com/ck/a?!&amp;ptn=3&amp;u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS9wYWdl&amp;ntb=1"><b>Example</b> Title</a></h2><div class="b_caption"><p class="b_lineclamp2" data-rslinkclamp-iid="">A <b>snippet</b> &amp; more</p></div></li>`;
+// uddg= param is the URL-encoded target URL.
+const DDG_HTML = `<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage&amp;rut=abc123"><b>Example</b> Title</a><a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage&amp;rut=abc123">A <b>snippet</b> &amp; more</a>`;
 
 describe('web search', () => {
-	it('parses Bing html results and decodes the u= redirect', () => {
-		const results = parseBing(BING_HTML);
+	it('parses DDG html results and decodes the uddg= redirect', () => {
+		const results = parseDdg(DDG_HTML);
 		expect(results).toHaveLength(1);
 		expect(results[0].title).toBe('Example Title');
 		expect(results[0].url).toBe('https://example.com/page');
@@ -29,10 +29,21 @@ describe('web search', () => {
 	});
 
 	it('formats results into model content', async () => {
-		const fakeFetch = async () => new Response(BING_HTML);
+		const fakeFetch = async () => new Response(DDG_HTML);
 		const r = await webSearch('test query', fakeFetch);
 		expect(r.content).toContain('Example Title');
 		expect(r.content).toContain('https://example.com/page');
+	});
+
+	it('reverses the model-facing format for display', async () => {
+		const fakeFetch = async () => new Response(DDG_HTML);
+		const r = await webSearch('test query', fakeFetch);
+		expect(parseSearchContent(r.content)).toEqual([
+			{ title: 'Example Title', url: 'https://example.com/page', snippet: 'A snippet & more' }
+		]);
+		// non-search content (errors, fetch text) falls back to null
+		expect(parseSearchContent('Error: search failed with HTTP 500')).toBeNull();
+		expect(parseSearchContent('plain page text')).toBeNull();
 	});
 });
 

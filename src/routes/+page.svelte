@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { replaceState } from '$app/navigation';
 	import ConversationList from './components/ConversationList.svelte';
 	import Message from './components/Message.svelte';
 	import Composer from './components/Composer.svelte';
 	import Settings from './components/Settings.svelte';
 	import About from './components/About.svelte';
 	import Lightbox from './components/Lightbox.svelte';
-	import Onboarding from './components/Onboarding.svelte';
+	import Servers from './components/Servers.svelte';
 	import ModelPicker from './components/ModelPicker.svelte';
 	import ReasoningPicker from './components/ReasoningPicker.svelte';
 	import { page } from '$app/state';
@@ -15,12 +16,13 @@
 	import { workingContext } from '$lib/models.js';
 	import type {
 		AttachmentMeta,
+		AppConfig,
 		Conversation,
 		ConversationMeta,
-		EndpointConfig,
 		PendingAttachment,
 		ReasoningLevel,
-		Message as ChatMessage
+		Message as ChatMessage,
+		ServerConfig
 	} from '$lib/types.js';
 
 	interface LiveTool {
@@ -31,11 +33,18 @@
 	}
 
 	// load() (+page.ts) fetched the config and applied theme/accent pre-render.
-	let config = $state<EndpointConfig | null>(page.data.config ?? null);
-	// A valid config needs an endpoint AND a model — anything less re-enters
-	// onboarding (with the endpoint pre-filled), so the main window is only
-	// ever reached with a usable setup.
-	const onboard = $derived(!config || !config.baseUrl || !config.defaultModel);
+	// Every config mutation assigns the server's fresh (stripped) response here, so
+	// the client never runs a divergent copy.
+	let config = $state<AppConfig | null>(page.data.config ?? null);
+	// The active server is what the app talks to; capability records live on it.
+	// (client-side find: $lib/config pulls in node:fs, so it can't be imported here)
+	const activeSrv = $derived.by(() => {
+		const c = config; // const so the narrowing survives the find callback
+		return c ? c.servers.find((s) => s.id === c.activeServerId) ?? null : null;
+	});
+	// No active server → the full-screen server flow (required mode, not closable).
+	// Zero servers and a deleted active server both land here.
+	const needsServer = $derived(!config || !activeSrv);
 
 	let model = $state('');
 	let conversations = $state<ConversationMeta[]>([]);
@@ -43,12 +52,19 @@
 	let streaming = $state(false);
 	let aborter: AbortController | null = null; // in-flight turn; stop() aborts it
 	let sentText = $state(''); // the user's just-sent message, shown before the server round-trip
-	let trimmedNote = $state(''); // set by a 'context' SSE event; cleared on the next send
+	let trimmedNote = $state(''); // transient note (context-trim events, orphaned-chat model swap); cleared on the next send
 	let liveText = $state('');
 	let liveReasoning = $state('');
 	let liveTools = $state<LiveTool[]>([]);
 	let error = $state('');
 	let showSettings = $state(false);
+	let serversOpen = $state(false);
+	// Deleting the active server from the panel flips the full-screen gate on;
+	// drop the panel flag so it doesn't re-render over the gate after re-add.
+	$effect(() => {
+		void needsServer;
+		if (needsServer) serversOpen = false;
+	});
 	let aboutOpen = $state(false);
 	let dragDepth = $state(0); // dragenter/leave pairs; >0 = a file drag is over the app
 	const dragging = $derived(dragDepth > 0);
@@ -140,7 +156,7 @@
 	// drop their bytes, so the server never ships them into a turn. Docs stay
 	// attached — only isImage chips are touched.
 	$effect(() => {
-		if (config?.vision?.[model] !== false) return;
+		if (activeSrv?.vision?.[model] !== false) return;
 		const stale = pending.filter((p) => p.status === 'ready' && p.isImage && p.meta);
 		if (!stale.length) return;
 		pending = pending.map((p) =>
@@ -194,16 +210,13 @@
 			if (!active) return;
 		}
 		const convId = active.id;
-		// Confirmed non-vision model: don't ship images upstream — the red chip
-		// says why (docs still upload fine through the same path).
-		const visionOff = config?.vision?.[model] === false;
+		// Confirmed non-vision model: images are rejected outright — banner says
+		// why, nothing is staged (docs in the same batch still upload fine).
+		const visionOff = activeSrv?.vision?.[model] === false;
 		for (const file of files) {
 			const key = crypto.randomUUID();
 			if (file.type.startsWith('image/') && visionOff) {
-				pending = [
-					...pending,
-					{ key, name: file.name, size: file.size, status: 'error', isImage: true, error: `Model “${model}” doesn’t support images` }
-				];
+				error = `Model “${model}” doesn’t support images — images can’t be attached`;
 				continue;
 			}
 			pending = [...pending, { key, name: file.name, size: file.size, status: 'uploading', isImage: true }];
@@ -279,12 +292,33 @@
 		conversations = await api<ConversationMeta[]>('/api/conversations');
 	}
 
+	// The open conversation lives in the URL hash — the browser persists it across
+	// refreshes, so a reload lands back where you were. SvelteKit's replaceState
+	// (not raw history) keeps its router in sync; hash-only, so no route load.
+	function setHash(id: string | null) {
+		const url = new URL(location.href);
+		url.hash = id ? `#${id}` : '';
+		replaceState(url, {});
+	}
+
 	async function openConversation(id: string) {
 		if (streaming) return;
 		active = await api<Conversation>(`/api/conversations/${id}`);
-		if (active.model) model = active.model;
+		setHash(id);
+		trimmedNote = '';
 		webOn = active.webTools ?? true;
 		reasoningLevel = active.reasoning ?? 'medium';
+		if (active.model && activeSrv?.models.includes(active.model)) {
+			model = active.model;
+		} else if (active.model) {
+			// This chat's model isn't on the active server (created on another
+			// server, or the server's list changed): seed a usable model so
+			// follow-ups work, and say so. Stateless — if the model reappears on
+			// the list, the original comes back on the next open.
+			model = seedModel(activeSrv);
+			trimmedNote = `This chat used ${active.model}, which isn't on the current server — switched to ${model || 'no model'}.`;
+			void probeModel(model);
+		}
 	}
 
 	// Materialize the record — the first message (or attachment) creates the
@@ -294,6 +328,7 @@
 			method: 'POST',
 			body: JSON.stringify({ model: model || undefined, webTools: webOn, reasoning: reasoningLevel })
 		});
+		setHash(active.id);
 		await refreshList();
 	}
 
@@ -307,6 +342,7 @@
 		}
 		pending = [];
 		active = null;
+		setHash(null);
 	}
 
 	function deleteConversation(id: string) {
@@ -318,7 +354,10 @@
 		const id = pendingDelete;
 		pendingDelete = null;
 		await api(`/api/conversations/${id}`, { method: 'DELETE' });
-		if (active?.id === id) active = null;
+		if (active?.id === id) {
+			active = null;
+			setHash(null);
+		}
 		await refreshList();
 	}
 
@@ -349,29 +388,54 @@
 		});
 	}
 
+	// Pill seed: this server's last pick if it's still on the model list, else
+	// the first model (lastModel can outlive a /models refresh that dropped it).
+	function seedModel(srv: ServerConfig | null) {
+		return srv?.lastModel && srv.models.includes(srv.lastModel) ? srv.lastModel : srv?.models[0] ?? '';
+	}
+
 	function chooseModel(m: string) {
 		model = m;
 		if (active) void updateConversation({ model: m });
 		void probeModel(m);
+		// Remember the pick per server so a refresh doesn't bounce the pill back to
+		// models[0] (and re-probe a model that's already known).
+		if (config && activeSrv)
+			void api('/api/config', {
+				method: 'PUT',
+				body: JSON.stringify({ servers: config.servers.map((s) => (s.id === activeSrv.id ? { ...s, lastModel: m } : s)) })
+			}).catch(() => {});
 	}
 
 	// Capability probe (vision + accepted reasoning efforts): fire-and-forget for a model
-	// with no conclusive entry. On success it updates the local config copy — the
-	// image attach gate and the reasoning picker react to it. Best-effort:
-	// failures just re-probe next selection.
+	// with no conclusive entry. On success the result is merged into the active
+	// server's record — the image attach gate and the reasoning picker react to it.
+	// Best-effort: failures just re-probe next selection.
 	async function probeModel(m: string) {
-		if (!m || !config?.baseUrl) return;
-		const visionKnown = config.vision && m in config.vision;
-		const reasoningKnown = config.reasoning && m in config.reasoning;
-		if (visionKnown && reasoningKnown) return;
+		const srvId = activeSrv?.id;
+		if (!m || !srvId) return;
+		const rec = () => config?.servers.find((s) => s.id === srvId);
+		const known = (r: Record<string, unknown> | undefined) => !!r && m in r;
+		if (known(rec()?.vision) && known(rec()?.reasoning)) return;
 		try {
 			const res = await fetch('/api/models/probe', { method: 'POST', body: JSON.stringify({ model: m }) });
 			if (!res.ok) return;
 			const data = (await res.json()) as { vision?: boolean | null; reasoning?: ReasoningLevel[] | null };
 			if (!config) return;
-			if (data.vision === true || data.vision === false)
-				config = { ...config, vision: { ...config.vision, [m]: data.vision } };
-			if (data.reasoning) config = { ...config, reasoning: { ...config.reasoning, [m]: data.reasoning } };
+			config = {
+				...config,
+				servers: config.servers.map((s) =>
+					s.id === srvId
+						? {
+								...s,
+								...(data.vision === true || data.vision === false
+									? { vision: { ...s.vision, [m]: data.vision } }
+									: {}),
+								...(data.reasoning ? { reasoning: { ...s.reasoning, [m]: data.reasoning } } : {})
+							}
+						: s
+				)
+			};
 		} catch {
 			// network hiccup — next selection retries
 		}
@@ -478,6 +542,17 @@
 		aborter?.abort();
 	}
 
+	// The server can invalidate cached capabilities mid-turn (a 4xx image turn
+	// clears the vision entry, a rejected effort clears reasoning) — pull the
+	// fresh config after every turn so the client never runs a stale copy.
+	async function refreshConfig() {
+		try {
+			config = await api<AppConfig>('/api/config');
+		} catch {
+			// offline — the next page load repairs it
+		}
+	}
+
 	// Post-turn sync: re-read the persisted conversation (live text is replaced by
 	// what's on disk, tool rows included), name the chat in the background, refresh.
 	// keepLive (user stop): skip the re-read — the streamed partial is what the
@@ -500,6 +575,7 @@
 				void refreshList();
 			})().catch(() => {});
 		await refreshList();
+		void refreshConfig();
 	}
 
 	function toolResultsFor(msg: ChatMessage): Record<string, string> {
@@ -542,20 +618,27 @@
 
 	const enterApp = async () => {
 		await refreshList();
-		// Start on a fresh chat; the first message creates the conversation.
+		// Restore the conversation that was open before the refresh (URL hash).
+		// A stale hash (conversation since deleted) falls through to a fresh chat.
+		const id = location.hash.slice(1);
+		if (id && conversations.some((c) => c.id === id)) void openConversation(id);
 	};
 
-	async function onOnboardDone() {
-		const cfg = await api<EndpointConfig>('/api/config');
+	// The Servers flow (required gate or the sidebar panel) persists a new config
+	// and hands back the server's fresh response — assign it, re-seed the model
+	// if the active server's list no longer holds it, and re-probe.
+	function onServersChanged(cfg: AppConfig) {
 		config = cfg;
-		model = cfg.defaultModel ?? '';
+		if (activeSrv && !activeSrv.models.includes(model)) model = seedModel(activeSrv);
 		void probeModel(model);
 		void enterApp();
+		// persist the whole config (the PUT inherits stored keys by id); a failed
+		// write leaves the local state as-is — the panel can retry
+		void api('/api/config', { method: 'PUT', body: JSON.stringify(cfg) }).catch(() => {});
 	}
 
-	function onConfigSaved(cfg: EndpointConfig) {
+	function onConfigSaved(cfg: AppConfig) {
 		config = cfg;
-		if (!model) model = cfg.defaultModel ?? '';
 	}
 
 	// Scroll on real changes only: new messages (count), a new conversation (id), or
@@ -577,21 +660,22 @@
 	);
 	// Unknown ceiling (server reports no context size) → no indicator rather than a
 	// percentage of an assumed window.
-	const working = $derived(config ? workingContext(config, model) : null);
-	const contextPct = $derived(config && lastPrompt && working ? lastPrompt / working : 0);
+	const working = $derived(activeSrv ? workingContext(activeSrv, model, config?.contextReserve) : null);
+	const contextPct = $derived(activeSrv && lastPrompt && working ? lastPrompt / working : 0);
 
 	onMount(() => {
-		// Config arrived with the page data (load in +page.ts).
-		if (!onboard) {
-			model = config?.defaultModel ?? '';
+		// Config arrived with the page data (load in +page.ts). The pill seeds from
+		// the active server's last pick (or its first model on a fresh server).
+		if (!needsServer) {
+			model = seedModel(activeSrv);
 			void probeModel(model);
 			void enterApp();
 		}
 	});
 </script>
 
-{#if onboard}
-	<Onboarding ondone={onOnboardDone} initBaseUrl={config?.baseUrl ?? ''} />
+{#if needsServer}
+	<Servers required config={config ?? { servers: [], activeServerId: null }} onchange={onServersChanged} />
 {:else}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="shell" ondragenter={dragEnter} ondragleave={dragLeave} ondragover={dragOver} ondrop={fileDrop}>
@@ -705,7 +789,7 @@
 						</div>
 					{/if}
 					<div class="dock-controls">
-						<ModelPicker model={model} models={config?.models ?? []} onselect={chooseModel} />
+						<ModelPicker model={model} models={activeSrv?.models ?? []} onselect={chooseModel} />
 						<button
 							class="web-chip"
 							class:on={webOn}
@@ -719,7 +803,7 @@
 							<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10" /><path d="M2 12h20" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg>
 							Web
 						</button>
-						{#if config?.vision?.[model] === true}
+						{#if activeSrv?.vision?.[model] === true}
 							<span class="vision-chip" class:on={hasImage} title={hasImage ? 'Image attached — included with your next message' : 'This model accepts image attachments'}>
 								<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" /></svg>
 								Vision
@@ -731,15 +815,10 @@
 									<span class="spark" aria-hidden="true" onanimationiteration={repositionSpark} style="--x: 48%; --y: 0%; --s: 0.7; --i: 0.55; --d: 5.9s; --dl: 3.2s"></span>
 								{/if}
 							</span>
-						{:else if config?.vision?.[model] === false}
-							<span class="vision-chip off" title="This model doesn’t support images — image attachments won’t be processed">
-								<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" /><path d="m3 3 18 18" /></svg>
-								Vision off
-							</span>
 						{/if}
 						<ReasoningPicker
 							level={reasoningLevel}
-							supported={config?.reasoning?.[model]}
+							supported={activeSrv?.reasoning?.[model]}
 							onselect={(l) => {
 								reasoningLevel = l;
 								if (active) void updateConversation({ reasoning: l });
@@ -769,7 +848,20 @@
 		</div>
 	{/if}
 	{#if showSettings && config}
-		<Settings config={config} onsaved={onConfigSaved} onclose={() => (showSettings = false)} />
+		<!-- The flow takes over the screen; drop the modal so its Escape handler
+			doesn't close both layers at once. -->
+		<Settings
+			config={config}
+			onmanage={() => {
+				showSettings = false;
+				serversOpen = true;
+			}}
+			onsaved={onConfigSaved}
+			onclose={() => (showSettings = false)}
+		/>
+	{/if}
+	{#if serversOpen && config}
+		<Servers config={config} onchange={onServersChanged} onclose={() => (serversOpen = false)} />
 	{/if}
 	{#if aboutOpen}
 		<About onclose={() => (aboutOpen = false)} />

@@ -58,11 +58,18 @@ async function readAll(res: Response): Promise<string> {
 	return out;
 }
 
-beforeAll(() => {
+function writeCfg(extra: Record<string, unknown> = {}) {
 	writeFileSync(
 		configPath,
-		JSON.stringify({ name: '', baseUrl: 'http://test/v1', apiKey: '', models: [], defaultModel: 'm1' })
+		JSON.stringify({
+			servers: [{ id: 's1', name: 'test', baseUrl: 'http://test/v1', apiKey: '', models: [], ...extra }],
+			activeServerId: 's1'
+		})
 	);
+}
+
+beforeAll(() => {
+	writeCfg();
 	fixtureConversation();
 });
 afterAll(() => {
@@ -137,15 +144,14 @@ describe('POST /api/chat (SSE)', () => {
 		const conv = JSON.parse(readFileSync(convPath, 'utf8')) as { attachments?: unknown[] };
 		conv.attachments = [{ id: 'img1', name: 'img1.png', size: 3, mime: 'image/png', isImage: true, state: 'ready', createdAt: 1 }];
 		writeFileSync(convPath, JSON.stringify(conv));
-		writeFileSync(
-			configPath,
-			JSON.stringify({ name: '', baseUrl: 'http://test/v1', apiKey: '', models: [], defaultModel: 'm1', vision: { m1: true } })
-		);
+		writeCfg({ vision: { m1: true } });
 		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('no images here', { status: 400 })));
 		const res = await POST({ request: chatRequest() });
 		const body = await readAll(res);
 		expect(body).toContain('may not support images');
-		const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as { vision?: Record<string, boolean> };
-		expect(cfg.vision?.m1).toBeUndefined(); // deleted, so the next selection re-probes
+		const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as {
+			servers: { vision?: Record<string, boolean> }[];
+		};
+		expect(cfg.servers[0].vision?.m1).toBeUndefined(); // deleted, so the next selection re-probes
 	});
 });

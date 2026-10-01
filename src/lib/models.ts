@@ -9,16 +9,16 @@ const CONTEXT_KEYS = [
 	'max_input_tokens'
 ];
 
-import type { EndpointConfig } from '$lib/types.js';
+import type { ServerConfig } from '$lib/types.js';
 
 // Working limit = ceiling × (1 − reserve). Ceiling: the active model's detected
 // context, then the configured whole-model ceiling — and nothing else: an unknown
 // ceiling returns null so callers don't trim against an assumed window.
 // Pure so both the client (indicator) and server (trim) share one formula.
-export function workingContext(cfg: EndpointConfig, model: string): number | null {
+export function workingContext(cfg: ServerConfig, model: string, reserve = 0.11): number | null {
 	const ceiling = cfg.modelContext?.[model] ?? cfg.contextWindow;
 	if (!ceiling || !Number.isFinite(ceiling) || ceiling <= 0) return null;
-	return Math.round(ceiling * (1 - (cfg.contextReserve ?? 0.11)));
+	return Math.round(ceiling * (1 - reserve));
 }
 
 // Pure, so it's unit-testable. Tolerates non-conforming bodies (returns empty).

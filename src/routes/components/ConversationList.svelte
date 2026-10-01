@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { ConversationMeta } from '$lib/types.js';
+	import { fullDate, timeAgo } from '$lib/time.js';
 
 	let {
 		conversations,
@@ -15,13 +16,6 @@
 		ondelete: (id: string) => void;
 	} = $props();
 
-	function timeAgo(ts: number): string {
-		const s = Math.floor((Date.now() - ts) / 1000);
-		if (s < 60) return 'now';
-		if (s < 3600) return `${Math.floor(s / 60)}m`;
-		if (s < 86400) return `${Math.floor(s / 3600)}h`;
-		return new Date(ts).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
-	}
 </script>
 
 <button class="new-btn" onclick={onnew}>
@@ -43,7 +37,7 @@
 				<span class="t">{c.title}</span>
 			</button>
 			<span class="entry-slot">
-				<span class="meta">{timeAgo(c.updatedAt)}</span>
+				<span class="meta" title={fullDate(c.updatedAt)}>{timeAgo(c.updatedAt)}</span>
 				<button class="del" aria-label={`Delete ${c.title}`} onclick={() => ondelete(c.id)}>
 					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
 				</button>
